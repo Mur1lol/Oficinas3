@@ -1,0 +1,34 @@
+﻿# ChessAI 2.0 — Voice Command System
+# Requirements for Raspberry Pi 3B+ (Bookworm 64-bit, Python 3.11)
+#
+# Install with:
+#   pip install -r requirements.txt
+#
+# System packages required FIRST (see scripts/install_pi.sh):
+#   sudo apt install portaudio19-dev libopenblas-dev
+
+# ── Audio capture ──────────────────────────────────────────────────────────
+# PyAudio 0.2.14 ships ARM64 wheels on PyPI for Python 3.11
+PyAudio==0.2.14
+
+# ── Speech-to-Text ─────────────────────────────────────────────────────────
+# Vosk 0.3.45 — Kaldi-based offline STT, ~40 MB small-english model
+vosk==0.3.45
+
+# ── Voice Activity Detection ────────────────────────────────────────────────
+# WebRTC VAD — extremely lightweight C extension, no heavy dependencies
+webrtcvad==2.0.10
+
+# ── Wake-word detection ─────────────────────────────────────────────────────
+# openWakeWord — ONNX-based, runs a single core of Pi 3+ in real time
+# Install only if you have the magnus.onnx model; the system falls back
+# to Vosk-keyword mode if this package is absent.
+openwakeword==0.6.0
+
+# openWakeWord depends on onnxruntime for ONNX inference
+# Use the community ARM64 wheel if the official one fails to install:
+#   pip install onnxruntime  (official, may work on 64-bit Pi OS)
+onnxruntime==1.18.0
+
+# numpy is required by openWakeWord for audio array conversion
+numpy==1.26.4
