@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_parser.py
 ====================
 Parametrised unit tests for voice/parser.py.
@@ -53,6 +53,17 @@ SUCCESS_CASES = [
     ("move b2 c3",               "B2", "C3"),
     ("move d4 d5",               "D4", "D5"),
     ("move f6 g7",               "F6", "G7"),
+    # NATO phonetic alphabet
+    ("move echo two echo four",   "E2", "E4"),
+    ("move alpha two alpha four", "A2", "A4"),
+    ("move hotel one hotel four", "H1", "H4"),
+    ("move charlie one foxtrot four", "C1", "F4"),
+    ("move bravo one delta two",  "B1", "D2"),
+    ("move golf one hotel eight", "G1", "H8"),
+    # Acoustic misrecognition recovery ('8' misheard for 'h' / 'aitch')
+    ("move h one eight four",     "H1", "H4"),
+    ("move eight two eight four", "H2", "H4"),
+    ("move eight one eight eight","H1", "H8"),
 ]
 
 

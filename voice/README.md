@@ -1,4 +1,4 @@
-﻿# ChessAI 2.0 — Voice Command System
+# ChessAI 2.0 — Voice Command System
 
 Offline voice recognition pipeline for Raspberry Pi 3B+.
 
@@ -169,6 +169,9 @@ if result["valid"]:
 | "MOVE G1 F3" | MOVE G1 F3 |
 | "move from a seven to a eight" | MOVE A7 A8 |
 | "Move from E2 to E4" | MOVE E2 E4 |
+| "Move Echo 2 Echo 4" (NATO) | MOVE E2 E4 |
+| "Move Hotel 1 Hotel 4" (NATO) | MOVE H1 H4 |
+| "Move Alpha 2 Alpha 4" (NATO) | MOVE A2 A4 |
 
 ---
 

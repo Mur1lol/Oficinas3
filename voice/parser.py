@@ -1,4 +1,4 @@
-﻿"""
+"""
 parser.py
 =========
 Converts raw STT transcript text into structured MoveCommand objects.
@@ -51,8 +51,9 @@ class MoveCommand:
 # Spoken digit words -> digit character
 _DIGIT_WORDS: dict[str, str] = config.SPOKEN_DIGITS
 
-# Spoken column phonetics (Vosk sometimes hears these)
+# Spoken column phonetics (Vosk sometimes hears these or user uses NATO alphabet)
 _COLUMN_PHONETICS: dict[str, str] = {
+    **getattr(config, "NATO_PHONETICS", {}),
     "ay": "a",
     "bee": "b",
     "see": "c",
@@ -93,7 +94,7 @@ def _normalise_text(text: str) -> str:
     tokens = text.split()
     tokens = [_DIGIT_WORDS.get(t, t) for t in tokens]
 
-    # Replace column phonetics (e.g. "ee" -> "e")
+    # Replace column phonetics (e.g. "ee" -> "e", "echo" -> "e")
     tokens = [_COLUMN_PHONETICS.get(t, t) for t in tokens]
 
     return " ".join(tokens)
@@ -103,9 +104,10 @@ def _extract_squares(tokens: list[str]) -> list[str]:
     """
     Extract chess square tokens from a token list.
 
-    Accepts two formats:
-      - Compact  : "e2"  (single token, letter + digit)
-      - Expanded : "e" "2"  (two adjacent tokens)
+    Accepts formats:
+      - Compact   : "e2"  (single token, letter + digit)
+      - Expanded  : "e" "2"  (two adjacent tokens)
+      - Heuristic : "8" "4" -> "h4" (Vosk acoustic confusion between "aitch" and "eight")
 
     Returns a list of normalised square strings (e.g. ["e2", "e4"]).
     """
@@ -132,6 +134,19 @@ def _extract_squares(tokens: list[str]) -> list[str]:
             and tokens[i + 1] in valid_rows
         ):
             squares.append(tok + tokens[i + 1])
+            i += 2
+            continue
+
+        # Acoustic heuristic: "8" misheard as "H" ("eight" vs "aitch").
+        # If token is "8" and followed by a valid row (1-8), it is in column position
+        # and represents the letter "H" (e.g. "eight four" -> "h4").
+        if (
+            tok == "8"
+            and i + 1 < len(tokens)
+            and len(tokens[i + 1]) == 1
+            and tokens[i + 1] in valid_rows
+        ):
+            squares.append("h" + tokens[i + 1])
             i += 2
             continue
 

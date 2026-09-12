@@ -1,4 +1,4 @@
-﻿"""
+"""
 config.py
 =========
 Central configuration for the ChessAI 2.0 voice command system.
@@ -122,15 +122,39 @@ SPOKEN_DIGITS: dict[str, str] = {
     "eight": "8",
 }
 
+# NATO phonetic alphabet for high-accuracy column recognition
+NATO_PHONETICS: dict[str, str] = {
+    "alpha":   "a",
+    "bravo":   "b",
+    "charlie": "c",
+    "delta":   "d",
+    "echo":    "e",
+    "foxtrot": "f",
+    "golf":    "g",
+    "hotel":   "h",
+}
+
+# Column tokens recognised in the Vosk small English dictionary
+_COLUMN_WORDS: list[str] = (
+    _COLUMNS
+    + ["ay", "bee", "see", "dee", "ee", "eff", "gee", "age", "hey"]
+    + list(NATO_PHONETICS.keys())
+)
+
 # Full grammar word list injected into KaldiRecognizer
-VOSK_GRAMMAR_WORDS: list[str] = (
-    ["move", "from", "to"]
-    + CHESS_SQUARES
-    + _COLUMNS
-    + _ROWS
-    + list(SPOKEN_DIGITS.keys())
-    + ["magnus", "magnets"]
-    + ["[unk]"]
+# Only words actually present in the Vosk vocabulary are included here
+# to prevent "word missing in vocabulary" warnings and grammar corruption.
+VOSK_GRAMMAR_WORDS: list[str] = sorted(
+    list(
+        set(
+            ["move", "from", "to"]
+            + _COLUMN_WORDS
+            + list(SPOKEN_DIGITS.keys())
+            + ["eight"]  # explicitly ensure 'eight' is included
+            + ["magnus", "magnets"]
+            + ["[unk]"]
+        )
+    )
 )
 
 # ---------------------------------------------------------------------------

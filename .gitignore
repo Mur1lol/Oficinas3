@@ -1,1 +1,6 @@
-voice/*.wav
+*.wav
+voice/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+voice/models/vosk-model-*/
