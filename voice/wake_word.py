@@ -1,4 +1,4 @@
-﻿"""
+"""
 wake_word.py
 ============
 Wake-word detection for ChessAI 2.0.
@@ -10,13 +10,11 @@ The detector exposes a single blocking call:
 
     detector = WakeWordDetector()
     detector.wait_for_wake_word(stream)  # blocks until MAGNUS is heard
-
-State transitions owned by main.py; this module only concerns itself with
-answering "did I just hear MAGNUS?".
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -25,6 +23,7 @@ import config
 from audio_capture import AudioStream
 
 log = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -59,10 +58,8 @@ class _OWWEngine(_BaseWakeWordEngine):
     openWakeWord ONNX backend.
 
     Loads the custom magnus.onnx model and scores every 80-ms chunk.
-    (openWakeWord internally uses 80 ms mel-spectrogram windows.)
     """
 
-    # openWakeWord expects 80-ms chunks at 16 kHz = 1280 samples = 2560 bytes
     _OWW_CHUNK_SAMPLES = 1280
     _OWW_CHUNK_BYTES   = _OWW_CHUNK_SAMPLES * 2  # 16-bit
 
@@ -84,7 +81,6 @@ class _OWWEngine(_BaseWakeWordEngine):
         return "openWakeWord (ONNX)"
 
     def process_frame(self, frame: bytes) -> bool:
-        """Buffer 30-ms VAD frames until we have an 80-ms OWW chunk."""
         self._buffer += frame
 
         detected = False
@@ -95,16 +91,13 @@ class _OWWEngine(_BaseWakeWordEngine):
             audio_np = self._np.frombuffer(chunk, dtype=self._np.int16)
             predictions = self._model.predict(audio_np)
 
-            # predictions is a dict: {model_name: score}
             score = max(predictions.values(), default=0.0)
             log.debug("[OWW] score=%.3f", score)
 
             if score >= config.OWW_THRESHOLD:
                 self._consecutive += 1
                 if self._consecutive >= config.OWW_TRIGGER_LEVEL:
-                    log.info(
-                        "[OWW] Wake word detected! score=%.3f", score
-                    )
+                    log.info("[OWW] Wake word detected! score=%.3f", score)
                     detected = True
                     self._consecutive = 0
             else:
@@ -118,36 +111,34 @@ class _OWWEngine(_BaseWakeWordEngine):
 
 
 # ---------------------------------------------------------------------------
-# Vosk keyword fallback engine
+# Vosk keyword engine (fallback)
 # ---------------------------------------------------------------------------
 
 class _VoskKeywordEngine(_BaseWakeWordEngine):
     """
-    Fallback wake-word engine using Vosk in streaming mode.
-
-    Loads the same Vosk small-english model used by the STT engine and
-    listens for any phrase in config.WAKE_WORD_PHRASES.
-
-    This adds ~100 MB RAM but avoids the need for the ONNX model file.
+    Vosk KaldiRecognizer configured with grammar restricted to wake-word phrases.
+    Supports both Portuguese and English models.
     """
 
-    def __init__(self) -> None:
-        import json
+    def __init__(
+        self,
+        language: str | None = None,
+        model_path: str | None = None,
+    ) -> None:
         from vosk import KaldiRecognizer, Model, SetLogLevel  # type: ignore
 
-        SetLogLevel(-1)  # suppress Kaldi verbose output
-        self._json = json
+        SetLogLevel(-1)
 
-        model_path = str(config.VOSK_MODEL_PATH)
-        log.info("[VoskKW] Loading Vosk model from %s", model_path)
-        model = Model(model_path)
+        self._language = language or config.LANGUAGE
+        path = str(model_path or config.get_model_path(self._language))
+        log.info("[VoskKW] Loading Vosk model (%s) from %s", self._language, path)
+        model = Model(path)
 
-        # Grammar restricted to wake-word phrases only for speed
-        import json as _json
-        grammar = _json.dumps(config.WAKE_WORD_PHRASES + ["[unk]"])
+        self._phrases = config.get_wake_word_phrases(self._language)
+        grammar = json.dumps(self._phrases + ["[unk]"], ensure_ascii=False)
         self._rec = KaldiRecognizer(model, config.SAMPLE_RATE, grammar)
         self._rec.SetWords(False)
-        log.info("[VoskKW] Ready. Listening for: %s", config.WAKE_WORD_PHRASES)
+        log.info("[VoskKW] Ready. Listening for: %s", self._phrases)
 
     @property
     def name(self) -> str:
@@ -155,18 +146,17 @@ class _VoskKeywordEngine(_BaseWakeWordEngine):
 
     def process_frame(self, frame: bytes) -> bool:
         if self._rec.AcceptWaveform(frame):
-            result = self._json.loads(self._rec.Result())
+            result = json.loads(self._rec.Result())
             text = result.get("text", "").lower().strip()
             if text:
                 log.debug("[VoskKW] heard: '%s'", text)
-            if any(phrase in text for phrase in config.WAKE_WORD_PHRASES):
+            if any(phrase in text for phrase in self._phrases):
                 log.info("[VoskKW] Wake word detected in: '%s'", text)
                 return True
         else:
-            # Check partial results for low-latency detection
-            partial = self._json.loads(self._rec.PartialResult())
+            partial = json.loads(self._rec.PartialResult())
             partial_text = partial.get("partial", "").lower()
-            if any(phrase in partial_text for phrase in config.WAKE_WORD_PHRASES):
+            if any(phrase in partial_text for phrase in self._phrases):
                 log.info("[VoskKW] Wake word in partial: '%s'", partial_text)
                 self._rec.Reset()
                 return True
@@ -182,48 +172,36 @@ class _VoskKeywordEngine(_BaseWakeWordEngine):
 
 class WakeWordDetector:
     """
-    High-level wake-word detector.
+    High-level wake-word detector with bilingual support.
 
     Automatically selects the best available backend:
     1. openWakeWord ONNX  (if config.OWW_MODEL_PATH exists)
     2. Vosk keyword scan  (fallback)
-
-    Usage
-    -----
-        detector = WakeWordDetector()
-        with AudioStream() as stream:
-            detector.wait_for_wake_word(stream)
-            # returns only after MAGNUS is detected
     """
 
-    def __init__(self) -> None:
+    def __init__(self, language: str | None = None) -> None:
+        self.language = language or config.LANGUAGE
         self._engine = self._build_engine()
 
     def _build_engine(self) -> _BaseWakeWordEngine:
         oww_path = config.OWW_MODEL_PATH
         if oww_path.exists():
             try:
-                engine = _OWWEngine(oww_path)
+                engine = _OWWEngine(str(oww_path))
                 log.info("Wake-word engine: %s", engine.name)
                 return engine
             except Exception as exc:
                 log.warning(
-                    "openWakeWord failed to load (%s). "
-                    "Falling back to Vosk keyword engine.", exc
+                    "openWakeWord failed to load (%s). Falling back to Vosk keyword engine.",
+                    exc,
                 )
 
-        # Fallback
-        engine = _VoskKeywordEngine()
+        engine = _VoskKeywordEngine(language=self.language)
         log.info("Wake-word engine: %s", engine.name)
         return engine
 
     def wait_for_wake_word(self, stream: AudioStream) -> None:
-        """
-        Block until the wake word MAGNUS is detected in the audio stream.
-
-        This is a tight loop: idle CPU is very low because the Vosk/OWW
-        models are optimised for streaming and we use a queue-based stream.
-        """
+        """Block until the wake word MAGNUS is detected in the audio stream."""
         log.info("Listening for wake word '%s'...", config.WAKE_WORD)
         self._engine.reset()
 

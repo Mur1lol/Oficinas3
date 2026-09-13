@@ -93,10 +93,14 @@ The pipeline auto-detects the ONNX file on startup.
 ## CLI Usage
 
 ```bash
-# Continuous live mic loop (Ctrl+C to stop)
+# Continuous live mic loop (uses config.LANGUAGE, default: pt-BR)
 python main.py
 
-# Listen for exactly one command, print JSON, exit
+# Switch language via command line
+python main.py --lang pt-BR        # Portuguese
+python main.py --lang en-US        # English
+
+# Listen for exactly one command + confirmation, print JSON, exit
 python main.py --once
 
 # Transcribe a WAV file (no wake-word gate)
@@ -111,67 +115,76 @@ python main.py --debug
 
 ---
 
-## Integration API
+## Supported Commands
 
-```python
-from voice.main import VoiceCommandPipeline
+| Command | English (`en-US`) | Portuguese (`pt-BR`) | Output `command` |
+|---|---|---|---|
+| **PLAY NEW GAME** | "Play new game", "New game", "Start game" | "Jogar novo jogo", "Novo jogo", "Iniciar jogo", "Começar jogo" | `NEW_GAME` |
+| **RESUME GAME** | "Resume game", "Resume", "Continue game" | "Continuar jogo", "Retomar jogo", "Continuar", "Retomar" | `RESUME_GAME` |
+| **RESIGN GAME** | "Resign game", "Resign", "Surrender" | "Desistir do jogo", "Desistir", "Abandonar jogo", "Abandonar" | `RESIGN_GAME` |
+| **MOVE** | "Move E2 E4", "Move from E2 to E4", "Move Echo 2 Echo 4" | "Mova E2 E4", "Mover de E2 para E4", "Mova de A1 para A2", "Mover de agá 1 para agá 4" | `MOVE` |
 
-pipeline = VoiceCommandPipeline()
+---
 
-# Wait for wake word + one command
-result = pipeline.listen_once()
-# {"wake_word": "MAGNUS", "command": "MOVE", "from": "E2", "to": "E4", "valid": True}
+## Interactive Confirmation (YES / NO or SIM / NÃO)
 
-if result["valid"]:
-    src = result["from"]   # "E2"
-    dst = result["to"]     # "E4"
-```
+After any valid command is spoken, the system asks for confirmation:
+* **English:** `[MAGNUS] Confirm {COMMAND}? Say YES or NO.`
+* **Portuguese:** `[MAGNUS] Confirmar {COMMAND}? Diga SIM ou NÃO.`
+
+The recognizer switches to an ultra-restricted confirmation grammar (`yes`, `no`, `sim`, `não`, etc.) to guarantee accuracy.
 
 ---
 
 ## Expected Output
 
-**Success:**
+**Move Confirmed:**
 ```json
 {
   "wake_word": "MAGNUS",
   "command": "MOVE",
   "from": "E2",
   "to": "E4",
+  "confirmed": true,
   "valid": true
 }
 ```
 
-**Timeout:**
+**Action Confirmed (New Game):**
 ```json
 {
-  "valid": false,
-  "reason": "No command heard within 4 seconds after wake word. Returning to listen mode."
+  "wake_word": "MAGNUS",
+  "command": "NEW_GAME",
+  "confirmed": true,
+  "valid": true
 }
 ```
 
-**Invalid square:**
+**Command Cancelled by User (said NO / NÃO):**
 ```json
 {
+  "wake_word": "MAGNUS",
+  "command": "MOVE",
+  "from": "E2",
+  "to": "E4",
+  "confirmed": false,
   "valid": false,
-  "reason": "Invalid destination square -- Invalid row '9' in 'E9'. Valid rows: 1-8."
+  "reason": "Comando cancelado pelo usuário (disse NÃO)."
 }
 ```
 
----
-
-## Supported Spoken Formats
-
-| You say | Parsed as |
-|---|---|
-| "Move E2 E4" | MOVE E2 E4 |
-| "move e two e four" | MOVE E2 E4 |
-| "MOVE G1 F3" | MOVE G1 F3 |
-| "move from a seven to a eight" | MOVE A7 A8 |
-| "Move from E2 to E4" | MOVE E2 E4 |
-| "Move Echo 2 Echo 4" (NATO) | MOVE E2 E4 |
-| "Move Hotel 1 Hotel 4" (NATO) | MOVE H1 H4 |
-| "Move Alpha 2 Alpha 4" (NATO) | MOVE A2 A4 |
+**Confirmation Timeout:**
+```json
+{
+  "wake_word": "MAGNUS",
+  "command": "MOVE",
+  "from": "E2",
+  "to": "E4",
+  "confirmed": false,
+  "valid": false,
+  "reason": "Confirmação expirou após 4s sem resposta SIM/NÃO."
+}
+```
 
 ---
 

@@ -1,7 +1,7 @@
-﻿"""
+"""
 validator.py
 ============
-Validates parsed chess commands from parser.py.
+Validates parsed chess commands from parser.py (both MoveCommand and ActionCommand).
 
 Returns a standardised result dict consumed by main.py.
 
@@ -14,8 +14,12 @@ Public API
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import config
+
+if TYPE_CHECKING:
+    from parser import Command
 
 log = logging.getLogger(__name__)
 
@@ -59,15 +63,15 @@ def is_valid_square(square: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 def validate(
-    command: "MoveCommand | None",
+    command: "Command | None",
     reason: str | None = None,
 ) -> dict:
     """
-    Validate a parsed MoveCommand.
+    Validate a parsed MoveCommand or ActionCommand.
 
     Parameters
     ----------
-    command : MoveCommand | None
+    command : Command | None
         The parsed command returned by parser.parse().
         Pass None when parsing itself failed.
     reason : str | None
@@ -76,8 +80,7 @@ def validate(
     Returns
     -------
     dict
-        Success::
-
+        Move Success::
             {
                 "wake_word": "MAGNUS",
                 "command": "MOVE",
@@ -86,8 +89,14 @@ def validate(
                 "valid": True,
             }
 
-        Failure::
+        Action Success::
+            {
+                "wake_word": "MAGNUS",
+                "command": "NEW_GAME" | "RESUME_GAME" | "RESIGN_GAME",
+                "valid": True,
+            }
 
+        Failure::
             {
                 "valid": False,
                 "reason": "<human-readable explanation>",
@@ -98,30 +107,44 @@ def validate(
         log.warning("Validation failed (no command): %s", msg)
         return {"valid": False, "reason": msg}
 
-    from_sq = command.from_square.upper()
-    to_sq   = command.to_square.upper()
+    from parser import ActionCommand, MoveCommand
 
-    ok, err = is_valid_square(from_sq)
-    if not ok:
-        log.warning("Invalid source square: %s", err)
-        return {"valid": False, "reason": f"Invalid source square — {err}"}
+    # 1. Action Commands (Game control)
+    if isinstance(command, ActionCommand):
+        log.info("Valid action command: %s", command.action)
+        return {
+            "wake_word": config.WAKE_WORD,
+            "command": command.action,
+            "valid": True,
+        }
 
-    ok, err = is_valid_square(to_sq)
-    if not ok:
-        log.warning("Invalid destination square: %s", err)
-        return {"valid": False, "reason": f"Invalid destination square — {err}"}
+    # 2. Move Commands
+    if isinstance(command, MoveCommand):
+        from_sq = command.from_square.upper()
+        to_sq   = command.to_square.upper()
 
-    if from_sq == to_sq:
-        msg = f"Source and destination are the same square ({from_sq})."
-        log.warning("Null move rejected: %s", msg)
-        return {"valid": False, "reason": msg}
+        ok, err = is_valid_square(from_sq)
+        if not ok:
+            log.warning("Invalid source square: %s", err)
+            return {"valid": False, "reason": f"Invalid source square — {err}"}
 
-    result = {
-        "wake_word": config.WAKE_WORD,
-        "command": "MOVE",
-        "from": from_sq,
-        "to": to_sq,
-        "valid": True,
-    }
-    log.info("Valid move command: %s -> %s", from_sq, to_sq)
-    return result
+        ok, err = is_valid_square(to_sq)
+        if not ok:
+            log.warning("Invalid destination square: %s", err)
+            return {"valid": False, "reason": f"Invalid destination square — {err}"}
+
+        if from_sq == to_sq:
+            msg = f"Source and destination are the same square ({from_sq})."
+            log.warning("Null move rejected: %s", msg)
+            return {"valid": False, "reason": msg}
+
+        log.info("Valid move command: %s -> %s", from_sq, to_sq)
+        return {
+            "wake_word": config.WAKE_WORD,
+            "command": "MOVE",
+            "from": from_sq,
+            "to": to_sq,
+            "valid": True,
+        }
+
+    return {"valid": False, "reason": f"Unknown command type: {type(command)}"}

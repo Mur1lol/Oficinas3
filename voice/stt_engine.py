@@ -1,20 +1,14 @@
-﻿"""
+"""
 stt_engine.py
 =============
 Speech-to-Text engine for ChessAI 2.0.
 
 Uses Vosk (KaldiRecognizer) with:
-  - Grammar restriction  : limits vocabulary to chess commands only,
-                           dramatically improving accuracy on Pi 3B+.
+  - Grammar restriction  : limits vocabulary to chess commands and actions.
+  - Confirmation grammar : dedicated ultra-restricted recognizer for YES/NO responses.
+  - Bilingual support    : pt-BR and en-US.
   - WebRTC VAD filtering : skips silent frames to save CPU cycles.
   - Timeout safety       : returns None if no speech within the deadline.
-
-Public API
-----------
-    engine = VoskSTTEngine()
-    with AudioStream() as stream:
-        text = engine.transcribe(stream, timeout=4.0)
-        # e.g. "move e two e four" or None on timeout
 """
 
 from __future__ import annotations
@@ -39,43 +33,58 @@ class VoskSTTEngine:
     """
     Streaming Vosk STT with VAD gating and grammar restriction.
 
-    The recognizer is loaded once at construction time (~100 MB RAM).
-    Subsequent calls to transcribe() reuse the same model — no reload cost.
+    Loads the acoustic model once. Provides separate recognition pipelines
+    for game commands and YES/NO confirmations.
 
     Parameters
     ----------
     model_path : str | None
-        Path to the Vosk model directory.  Defaults to config.VOSK_MODEL_PATH.
+        Path to the Vosk model directory. Defaults to config.get_model_path(language).
+    language : str | None
+        Language code ("pt-BR" or "en-US"). Defaults to config.LANGUAGE.
     """
 
-    def __init__(self, model_path: str | None = None) -> None:
+    def __init__(
+        self,
+        model_path: str | None = None,
+        language: str | None = None,
+    ) -> None:
         from vosk import KaldiRecognizer, Model, SetLogLevel  # type: ignore
 
         SetLogLevel(-1)  # suppress verbose Kaldi output
 
-        path = str(model_path or config.VOSK_MODEL_PATH)
-        log.info("[STT] Loading Vosk model from %s ...", path)
+        self.language = language or config.LANGUAGE
+        path = str(model_path or config.get_model_path(self.language))
+
+        log.info("[STT] Loading Vosk model (%s) from %s ...", self.language, path)
         self._model = Model(path)
         log.info("[STT] Vosk model loaded.")
 
-        # Grammar-restricted recognizer
-        grammar = json.dumps(config.VOSK_GRAMMAR_WORDS)
-        self._rec = KaldiRecognizer(
-            self._model, config.SAMPLE_RATE, grammar
-        )
-        self._rec.SetWords(True)   # include word-level timestamps in result
+        # 1. Grammar-restricted recognizer for game commands
+        cmd_grammar = config.get_grammar_words(self.language)
+        grammar_json = json.dumps(cmd_grammar, ensure_ascii=False)
+        self._rec = KaldiRecognizer(self._model, config.SAMPLE_RATE, grammar_json)
+        self._rec.SetWords(True)
+
+        # 2. Ultra-restricted recognizer for confirmation responses (YES/NO, SIM/NÃO)
+        confirm_grammar = config.get_confirmation_grammar(self.language)
+        confirm_json = json.dumps(confirm_grammar, ensure_ascii=False)
+        self._confirm_rec = KaldiRecognizer(self._model, config.SAMPLE_RATE, confirm_json)
+        self._confirm_rec.SetWords(False)
 
         # WebRTC VAD
         self._vad = webrtcvad.Vad(config.VAD_AGGRESSIVENESS)
 
         log.info(
-            "[STT] Ready. VAD aggressiveness=%d  grammar=%d words",
+            "[STT] Ready. Lang=%s VAD aggressiveness=%d  Command words=%d  Confirm words=%d",
+            self.language,
             config.VAD_AGGRESSIVENESS,
-            len(config.VOSK_GRAMMAR_WORDS),
+            len(cmd_grammar),
+            len(confirm_grammar),
         )
 
     # ------------------------------------------------------------------
-    # Main transcription method
+    # Command transcription
     # ------------------------------------------------------------------
 
     def transcribe(
@@ -84,35 +93,58 @@ class VoskSTTEngine:
         timeout: float = config.COMMAND_TIMEOUT_S,
     ) -> str | None:
         """
-        Listen to *stream* until speech is fully recognised or *timeout* expires.
-
-        Behaviour
-        ---------
-        1. Frames are fed to WebRTC VAD.
-        2. Only speech frames are passed to KaldiRecognizer.
-        3. When VAD detects *VAD_SILENCE_THRESHOLD* consecutive silent frames
-           after speech has been heard, we flush Vosk and return the result.
-        4. Hard timeout: if *timeout* seconds elapse before any result,
-           return None.
-
-        Returns
-        -------
-        str | None
-            Normalised lowercase transcript, or None on timeout / empty result.
+        Listen to *stream* until command speech is recognised or *timeout* expires.
         """
-        self._rec.Reset()
+        return self._stream_recognize(
+            stream=stream,
+            recognizer=self._rec,
+            timeout=timeout,
+            label="Command",
+        )
+
+    # ------------------------------------------------------------------
+    # Confirmation transcription (YES / NO)
+    # ------------------------------------------------------------------
+
+    def transcribe_confirmation(
+        self,
+        stream: AudioStream,
+        timeout: float = config.CONFIRM_TIMEOUT_S,
+    ) -> str | None:
+        """
+        Listen to *stream* specifically for confirmation words (YES/NO, SIM/NÃO).
+        """
+        return self._stream_recognize(
+            stream=stream,
+            recognizer=self._confirm_rec,
+            timeout=timeout,
+            label="Confirmation",
+        )
+
+    # ------------------------------------------------------------------
+    # Internal generic streaming recognizer with VAD
+    # ------------------------------------------------------------------
+
+    def _stream_recognize(
+        self,
+        stream: AudioStream,
+        recognizer,
+        timeout: float,
+        label: str = "Audio",
+    ) -> str | None:
+        recognizer.Reset()
 
         deadline = time.monotonic() + timeout
         speech_started = False
         silence_count = 0
         frames_captured = 0
 
-        log.info("[STT] Listening for command (timeout=%.1fs)...", timeout)
+        log.info("[STT] Listening for %s (timeout=%.1fs)...", label.lower(), timeout)
 
         for frame in stream:
             now = time.monotonic()
             if now >= deadline:
-                log.warning("[STT] Timeout — no command recognised.")
+                log.warning("[STT] Timeout — no %s recognised.", label.lower())
                 break
 
             frames_captured += 1
@@ -121,12 +153,12 @@ class VoskSTTEngine:
             try:
                 is_speech = self._vad.is_speech(frame, config.SAMPLE_RATE)
             except Exception:
-                is_speech = True  # if VAD fails, pass the frame through
+                is_speech = True
 
             if is_speech:
                 speech_started = True
                 silence_count = 0
-                self._rec.AcceptWaveform(frame)
+                recognizer.AcceptWaveform(frame)
             else:
                 if speech_started:
                     silence_count += 1
@@ -137,68 +169,39 @@ class VoskSTTEngine:
                 and silence_count >= config.VAD_SILENCE_THRESHOLD
                 and frames_captured >= config.COMMAND_MIN_FRAMES
             ):
-                log.debug("[STT] End of speech detected — flushing recognizer.")
+                log.debug("[STT] End of %s speech detected.", label.lower())
                 break
 
         # Retrieve final result
-        result_json = json.loads(self._rec.FinalResult())
+        result_json = json.loads(recognizer.FinalResult())
         text = result_json.get("text", "").strip().lower()
 
         if text:
-            log.info("[STT] Recognised: '%s'", text)
+            log.info("[STT] %s recognised: '%s'", label, text)
         else:
-            log.warning("[STT] Empty transcript.")
+            log.warning("[STT] Empty %s transcript.", label.lower())
             return None
 
         return text
 
     # ------------------------------------------------------------------
-    # Convenience: transcribe from a WAV file (for testing)
+    # WAV file transcription
     # ------------------------------------------------------------------
 
     def transcribe_file(self, wav_path: str) -> str | None:
-        """
-        Transcribe a WAV file instead of a live stream.
-
-        The file must be 16 kHz / 16-bit / mono PCM.
-        Useful for offline testing without a microphone.
-
-        Parameters
-        ----------
-        wav_path : str
-            Path to the WAV file.
-
-        Returns
-        -------
-        str | None
-            Recognised text or None if nothing was recognised.
-        """
+        """Transcribe a 16 kHz / 16-bit / mono WAV file."""
         import wave
-        import struct
 
         self._rec.Reset()
         log.info("[STT] Transcribing file: %s", wav_path)
 
         with wave.open(wav_path, "rb") as wf:
-            if wf.getnchannels() != 1:
-                raise ValueError("WAV must be mono (1 channel).")
-            if wf.getsampwidth() != 2:
-                raise ValueError("WAV must be 16-bit.")
-            if wf.getframerate() != config.SAMPLE_RATE:
-                raise ValueError(
-                    f"WAV must be {config.SAMPLE_RATE} Hz, "
-                    f"got {wf.getframerate()} Hz."
-                )
-
-            chunk_size = config.VAD_FRAME_BYTES
             while True:
                 data = wf.readframes(config.VAD_FRAME_SAMPLES)
                 if not data:
                     break
-                if len(data) == chunk_size:
-                    self._rec.AcceptWaveform(data)
+                self._rec.AcceptWaveform(data)
 
-        result_json = json.loads(self._rec.FinalResult())
-        text = result_json.get("text", "").strip().lower()
-        log.info("[STT] File transcript: '%s'", text)
+        result = json.loads(self._rec.FinalResult())
+        text = result.get("text", "").strip().lower()
         return text if text else None

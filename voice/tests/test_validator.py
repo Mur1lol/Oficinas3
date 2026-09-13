@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_validator.py
 =======================
 Unit tests for voice/validator.py.
@@ -13,7 +13,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from parser import MoveCommand
+from parser import MoveCommand, ActionCommand
 from validator import validate, is_valid_square
 import config
 
@@ -147,3 +147,16 @@ ALL_SQUARES = [
 def test_all_64_squares_valid(sq):
     ok, _ = is_valid_square(sq)
     assert ok is True, f"Expected {sq!r} to be a valid chess square"
+
+
+# ---------------------------------------------------------------------------
+# Action Commands validation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("action", ["NEW_GAME", "RESUME_GAME", "RESIGN_GAME"])
+def test_validate_action_commands(action):
+    cmd = ActionCommand(action)
+    result = validate(cmd)
+    assert result["valid"] is True
+    assert result["wake_word"] == config.WAKE_WORD
+    assert result["command"] == action

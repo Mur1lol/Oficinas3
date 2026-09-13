@@ -4,12 +4,19 @@ config.py
 Central configuration for the ChessAI 2.0 voice command system.
 
 All tuneable constants live here. Edit this file to adapt the system
-to your hardware (mic index, model paths, thresholds, timeouts).
+to your hardware (mic index, model paths, thresholds, timeouts, language).
 
 Optimised for Raspberry Pi 3B+ running Raspberry Pi OS Bookworm (64-bit).
 """
 
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Language configuration
+# ---------------------------------------------------------------------------
+
+# Active language: "pt-BR" (Português) or "en-US" (English)
+LANGUAGE: str = "pt-BR"
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -18,13 +25,23 @@ from pathlib import Path
 # Root directory of this voice module (wherever config.py lives)
 VOICE_DIR = Path(__file__).parent.resolve()
 
-# Vosk model directory  (download separately — see README.md)
-# Expected: voice/models/vosk-model-small-en-us-0.15/
-VOSK_MODEL_PATH = VOICE_DIR / "models" / "vosk-model-small-en-us-0.15"
+# Vosk models directory
+MODELS_DIR = VOICE_DIR / "models"
+VOSK_MODEL_EN_PATH = MODELS_DIR / "vosk-model-small-en-us-0.15"
+VOSK_MODEL_PT_PATH = MODELS_DIR / "vosk-model-small-pt-0.3"
 
-# openWakeWord ONNX model for "MAGNUS"  (train via Colab — see README.md)
-# If this file does not exist the system falls back to Vosk-keyword mode.
-OWW_MODEL_PATH = VOICE_DIR / "models" / "magnus.onnx"
+def get_model_path(lang: str | None = None) -> Path:
+    """Return the Vosk model directory Path for the requested language."""
+    selected_lang = (lang or LANGUAGE).lower()
+    if selected_lang.startswith("pt"):
+        return VOSK_MODEL_PT_PATH
+    return VOSK_MODEL_EN_PATH
+
+# Default model path pointing to the active language
+VOSK_MODEL_PATH = get_model_path(LANGUAGE)
+
+# openWakeWord ONNX model for "MAGNUS"
+OWW_MODEL_PATH = MODELS_DIR / "magnus.onnx"
 
 # ---------------------------------------------------------------------------
 # Audio capture
@@ -50,7 +67,6 @@ VAD_FRAME_BYTES: int = VAD_FRAME_SAMPLES * SAMPLE_WIDTH           # 960
 
 # PyAudio device index for the USB microphone.
 # Set to None for auto-detection (first USB mic found).
-# Override with an integer if auto-detection picks the wrong device.
 MIC_DEVICE_INDEX: int | None = None
 
 # PyAudio internal ring-buffer size (in frames)
@@ -64,63 +80,50 @@ PYAUDIO_BUFFER_FRAMES: int = VAD_FRAME_SAMPLES
 WAKE_WORD: str = "MAGNUS"
 
 # openWakeWord confidence threshold  [0.0 - 1.0]
-# Lower = more sensitive (more false positives)
-# Higher = more strict (may miss some utterances)
 OWW_THRESHOLD: float = 0.5
-
-# Number of consecutive frames above threshold before triggering
 OWW_TRIGGER_LEVEL: int = 1
 
-# Vosk-keyword fallback: phrases that count as the wake word
-# (used when magnus.onnx is absent)
-WAKE_WORD_PHRASES: list[str] = [
-    "magnus",
-    "magnets",   # common mis-hear
-    "magnus chess",
-]
+# Vosk-keyword fallback phrases that trigger wake word
+WAKE_WORD_PHRASES_EN: list[str] = ["magnus", "magnets", "magnus chess"]
+WAKE_WORD_PHRASES_PT: list[str] = ["magnus"]
+
+def get_wake_word_phrases(lang: str | None = None) -> list[str]:
+    selected_lang = (lang or LANGUAGE).lower()
+    if selected_lang.startswith("pt"):
+        return WAKE_WORD_PHRASES_PT
+    return WAKE_WORD_PHRASES_EN
+
+WAKE_WORD_PHRASES = get_wake_word_phrases(LANGUAGE)
 
 # ---------------------------------------------------------------------------
 # WebRTC VAD
 # ---------------------------------------------------------------------------
 
 # Aggressiveness mode  0 (lenient) - 3 (aggressive silence filtering)
-# Mode 2 works well for a quiet room; use 1 if the mic picks up more noise.
 VAD_AGGRESSIVENESS: int = 2
 
 # How many consecutive silent frames before we consider speech ended
 VAD_SILENCE_THRESHOLD: int = 20   # frames  (~600 ms at 30 ms/frame)
 
 # ---------------------------------------------------------------------------
-# Command listening
+# Command & Confirmation Timeouts
 # ---------------------------------------------------------------------------
 
 # Maximum seconds to wait for a command after the wake word
-COMMAND_TIMEOUT_S: float = 4.0
+COMMAND_TIMEOUT_S: float = 10.0
+
+# Maximum seconds to wait for a YES/NO confirmation response
+CONFIRM_TIMEOUT_S: float = 10.0
 
 # Minimum audio frames to capture before processing (avoids empty transcripts)
 COMMAND_MIN_FRAMES: int = 5
 
 # ---------------------------------------------------------------------------
-# Grammar - Vosk vocabulary restriction
+# Vocabulary, Grammar & Dictionaries
 # ---------------------------------------------------------------------------
 
 _COLUMNS = ["a", "b", "c", "d", "e", "f", "g", "h"]
 _ROWS    = ["1", "2", "3", "4", "5", "6", "7", "8"]
-
-# All 64 squares as spoken tokens
-CHESS_SQUARES: list[str] = [f"{c}{r}" for c in _COLUMNS for r in _ROWS]
-
-# Spoken digit words that map to row numbers
-SPOKEN_DIGITS: dict[str, str] = {
-    "one":   "1",
-    "two":   "2",
-    "three": "3",
-    "four":  "4",
-    "five":  "5",
-    "six":   "6",
-    "seven": "7",
-    "eight": "8",
-}
 
 # NATO phonetic alphabet for high-accuracy column recognition
 NATO_PHONETICS: dict[str, str] = {
@@ -134,28 +137,106 @@ NATO_PHONETICS: dict[str, str] = {
     "hotel":   "h",
 }
 
-# Column tokens recognised in the Vosk small English dictionary
-_COLUMN_WORDS: list[str] = (
-    _COLUMNS
-    + ["ay", "bee", "see", "dee", "ee", "eff", "gee", "age", "hey"]
-    + list(NATO_PHONETICS.keys())
-)
+# English Spoken Digits
+SPOKEN_DIGITS_EN: dict[str, str] = {
+    "one":   "1",
+    "two":   "2",
+    "three": "3",
+    "four":  "4",
+    "five":  "5",
+    "six":   "6",
+    "seven": "7",
+    "eight": "8",
+}
 
-# Full grammar word list injected into KaldiRecognizer
-# Only words actually present in the Vosk vocabulary are included here
-# to prevent "word missing in vocabulary" warnings and grammar corruption.
-VOSK_GRAMMAR_WORDS: list[str] = sorted(
-    list(
-        set(
-            ["move", "from", "to"]
-            + _COLUMN_WORDS
-            + list(SPOKEN_DIGITS.keys())
-            + ["eight"]  # explicitly ensure 'eight' is included
-            + ["magnus", "magnets"]
-            + ["[unk]"]
+# Portuguese Spoken Digits
+SPOKEN_DIGITS_PT: dict[str, str] = {
+    "um":     "1",
+    "dois":   "2",
+    "três":   "3",
+    "tres":   "3",
+    "quatro": "4",
+    "cinco":  "5",
+    "seis":   "6",
+    "sete":   "7",
+    "oito":   "8",
+}
+
+# Spoken Column Phonetics
+SPOKEN_COLUMNS_EN: dict[str, str] = {
+    **NATO_PHONETICS,
+    "ay": "a", "bee": "b", "see": "c", "dee": "d",
+    "ee": "e", "eff": "f", "gee": "g", "aitch": "h",
+    "age": "h", "hey": "h",
+}
+
+SPOKEN_COLUMNS_PT: dict[str, str] = {
+    **NATO_PHONETICS,
+    "aga": "h", "agá": "h",
+    "be": "b",  "bê": "b",
+    "ce": "c",  "cê": "c",
+    "dê": "d",
+    "á": "a",   "é": "e", "ê": "e",
+}
+
+def get_spoken_digits(lang: str | None = None) -> dict[str, str]:
+    selected_lang = (lang or LANGUAGE).lower()
+    if selected_lang.startswith("pt"):
+        return SPOKEN_DIGITS_PT
+    return SPOKEN_DIGITS_EN
+
+def get_spoken_columns(lang: str | None = None) -> dict[str, str]:
+    selected_lang = (lang or LANGUAGE).lower()
+    if selected_lang.startswith("pt"):
+        return SPOKEN_COLUMNS_PT
+    return SPOKEN_COLUMNS_EN
+
+# Confirmation affirmative/negative word lists
+CONFIRM_YES_EN: list[str] = ["yes", "yeah", "yep", "confirm"]
+CONFIRM_NO_EN:  list[str] = ["no", "nope", "cancel"]
+
+CONFIRM_YES_PT: list[str] = ["sim", "confirma", "confirmo", "positivo"]
+CONFIRM_NO_PT:  list[str] = ["não", "cancela", "cancelar", "negativo"]
+
+# Command Grammars for Vosk KaldiRecognizer
+def get_grammar_words(lang: str | None = None) -> list[str]:
+    """Return the list of allowed vocabulary words for the command recognizer."""
+    selected_lang = (lang or LANGUAGE).lower()
+    if selected_lang.startswith("pt"):
+        words = set(
+            ["jogar", "novo", "jogo", "iniciar", "começar", "continuar", "retomar",
+             "desistir", "abandonar", "mova", "mover", "de", "para", "pra"]
+            + list(SPOKEN_DIGITS_PT.keys())
+            + _COLUMNS
+            + ["aga", "agá", "be", "bê", "ce", "cê", "de", "dê", "bravo", "charlie", "delta", "echo", "golf", "hotel"]
+            + ["magnus", "[unk]"]
         )
-    )
-)
+    else:
+        words = set(
+            ["play", "new", "game", "resume", "resign", "move", "from", "to"]
+            + list(SPOKEN_DIGITS_EN.keys())
+            + _COLUMNS
+            + ["ay", "bee", "see", "dee", "ee", "eff", "gee", "age", "hey",
+               "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
+            + ["eight"]
+            + ["magnus", "magnets", "[unk]"]
+        )
+    return sorted(list(words))
+
+
+def get_confirmation_grammar(lang: str | None = None) -> list[str]:
+    """Return the restricted vocabulary words for the confirmation recognizer."""
+    selected_lang = (lang or LANGUAGE).lower()
+    if selected_lang.startswith("pt"):
+        words = set(CONFIRM_YES_PT + CONFIRM_NO_PT + ["[unk]"])
+    else:
+        words = set(CONFIRM_YES_EN + CONFIRM_NO_EN + ["[unk]"])
+    return sorted(list(words))
+
+
+# Backward compatibility aliases
+SPOKEN_DIGITS = SPOKEN_DIGITS_PT if LANGUAGE.lower().startswith("pt") else SPOKEN_DIGITS_EN
+VOSK_GRAMMAR_WORDS = get_grammar_words(LANGUAGE)
 
 # ---------------------------------------------------------------------------
 # Logging
