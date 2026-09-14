@@ -362,6 +362,14 @@ Examples:
         action="store_true",
         help="Enable DEBUG-level logging.",
     )
+    p.add_argument(
+        "--game-started",
+        dest="game_started",
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help="Initial game state: 0 = no game running (default), 1 = game already in progress.",
+    )
     return p
 
 
@@ -401,6 +409,7 @@ def main() -> None:
         command_timeout=args.timeout,
         confirm_timeout=args.confirm_timeout,
         language=lang,
+        game_started=args.game_started,
     )
 
     if args.once:
