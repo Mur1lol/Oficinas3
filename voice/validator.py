@@ -65,6 +65,7 @@ def is_valid_square(square: str) -> tuple[bool, str]:
 def validate(
     command: "Command | None",
     reason: str | None = None,
+    game_started: int = 0,
 ) -> dict:
     """
     Validate a parsed MoveCommand or ActionCommand.
@@ -111,6 +112,19 @@ def validate(
 
     # 1. Action Commands (Game control)
     if isinstance(command, ActionCommand):
+        if game_started == 0:
+            # Before game: only NEW_GAME and RESUME_GAME are valid
+            if command.action not in ("NEW_GAME", "RESUME_GAME"):
+                msg = f"Command '{command.action}' is not valid before a game starts. Say 'Play new game' or 'Resume game'."
+                log.warning("Phase mismatch: %s", msg)
+                return {"valid": False, "reason": msg}
+        else:
+            # During game: only RESIGN_GAME is valid as an action
+            if command.action not in ("RESIGN_GAME",):
+                msg = f"Command '{command.action}' is not valid during a game. Say 'Move E2 E4' or 'Resign game'."
+                log.warning("Phase mismatch: %s", msg)
+                return {"valid": False, "reason": msg}
+
         log.info("Valid action command: %s", command.action)
         return {
             "wake_word": config.WAKE_WORD,
@@ -120,6 +134,10 @@ def validate(
 
     # 2. Move Commands
     if isinstance(command, MoveCommand):
+        if game_started == 0:
+            msg = "Cannot move pieces before a game starts. Say 'Play new game' or 'Resume game'."
+            log.warning("Phase mismatch: %s", msg)
+            return {"valid": False, "reason": msg}
         from_sq = command.from_square.upper()
         to_sq   = command.to_square.upper()
 
@@ -138,7 +156,7 @@ def validate(
             log.warning("Null move rejected: %s", msg)
             return {"valid": False, "reason": msg}
 
-        log.info("Valid move command: %s -> %s", from_sq, to_sq)
+        log.success("Valid move command: %s -> %s", from_sq, to_sq)
         return {
             "wake_word": config.WAKE_WORD,
             "command": "MOVE",

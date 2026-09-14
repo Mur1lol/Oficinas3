@@ -149,17 +149,17 @@ class _VoskKeywordEngine(_BaseWakeWordEngine):
             result = json.loads(self._rec.Result())
             text = result.get("text", "").lower().strip()
             if text:
-                log.debug("[VoskKW] heard: '%s'", text)
+                log.info("[VoskKW] heard: '%s'", text)
             if any(phrase in text for phrase in self._phrases):
                 log.info("[VoskKW] Wake word detected in: '%s'", text)
                 return True
-        else:
-            partial = json.loads(self._rec.PartialResult())
-            partial_text = partial.get("partial", "").lower()
-            if any(phrase in partial_text for phrase in self._phrases):
-                log.info("[VoskKW] Wake word in partial: '%s'", partial_text)
-                self._rec.Reset()
-                return True
+        # else:
+        #     partial = json.loads(self._rec.PartialResult())
+        #     partial_text = partial.get("partial", "").lower()
+        #     if any(phrase in partial_text for phrase in self._phrases):
+        #         log.info("[VoskKW] Wake word in partial: '%s'", partial_text)
+        #         self._rec.Reset()
+        #         return True
         return False
 
     def reset(self) -> None:

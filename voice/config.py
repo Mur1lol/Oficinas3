@@ -84,7 +84,7 @@ OWW_THRESHOLD: float = 0.5
 OWW_TRIGGER_LEVEL: int = 1
 
 # Vosk-keyword fallback phrases that trigger wake word
-WAKE_WORD_PHRASES_EN: list[str] = ["magnus", "magnets", "magnus chess"]
+WAKE_WORD_PHRASES_EN: list[str] = ["magnus"]
 WAKE_WORD_PHRASES_PT: list[str] = ["magnus"]
 
 def get_wake_word_phrases(lang: str | None = None) -> list[str]:
@@ -137,6 +137,18 @@ NATO_PHONETICS: dict[str, str] = {
     "hotel":   "h",
 }
 
+# NATO phonetic alphabet for Portuguese
+NATO_PHONETICS_PT: dict[str, str] = {
+    "alfa":    "a",
+    "bravo":   "b",
+    "charlie": "c",
+    "delta":   "d",
+    "eco":     "e",
+    "foxtrote":"f",
+    "golf":    "g",
+    "hotel":   "h",
+}
+
 # English Spoken Digits
 SPOKEN_DIGITS_EN: dict[str, str] = {
     "one":   "1",
@@ -147,6 +159,8 @@ SPOKEN_DIGITS_EN: dict[str, str] = {
     "six":   "6",
     "seven": "7",
     "eight": "8",
+    "nine":  "9",
+    "ten":   "10",
 }
 
 # Portuguese Spoken Digits
@@ -160,23 +174,31 @@ SPOKEN_DIGITS_PT: dict[str, str] = {
     "seis":   "6",
     "sete":   "7",
     "oito":   "8",
+    "nove":   "9",
+    "dez":    "10",
 }
 
 # Spoken Column Phonetics
 SPOKEN_COLUMNS_EN: dict[str, str] = {
     **NATO_PHONETICS,
-    "ay": "a", "bee": "b", "see": "c", "dee": "d",
-    "ee": "e", "eff": "f", "gee": "g", "aitch": "h",
-    "age": "h", "hey": "h",
+    "ay": "a", 
+    "bee": "b", 
+    "see": "c", 
+    "dee": "d",
+    "ee": "e", 
+    "eff": "f", 
+    "gee": "g", 
+    "age": "h", "hey": "h", "eight": "h"
 }
 
 SPOKEN_COLUMNS_PT: dict[str, str] = {
-    **NATO_PHONETICS,
-    "aga": "h", "agá": "h",
+    **NATO_PHONETICS_PT,
+    "á": "a",
     "be": "b",  "bê": "b",
     "ce": "c",  "cê": "c",
     "dê": "d",
-    "á": "a",   "é": "e", "ê": "e",
+    "é": "e", "ê": "e",
+    "aga": "h", "agá": "h",
 }
 
 def get_spoken_digits(lang: str | None = None) -> dict[str, str]:
@@ -204,21 +226,18 @@ def get_grammar_words(lang: str | None = None) -> list[str]:
     selected_lang = (lang or LANGUAGE).lower()
     if selected_lang.startswith("pt"):
         words = set(
-            ["jogar", "novo", "jogo", "iniciar", "começar", "continuar", "retomar",
-             "desistir", "abandonar", "mova", "mover", "de", "para", "pra"]
+            ["jogar", "novo", "jogo", "continuar", "retomar", "desistir", "mover"]
             + list(SPOKEN_DIGITS_PT.keys())
             + _COLUMNS
-            + ["aga", "agá", "be", "bê", "ce", "cê", "de", "dê", "bravo", "charlie", "delta", "echo", "golf", "hotel"]
+            + list(SPOKEN_COLUMNS_PT.keys())
             + ["magnus", "[unk]"]
         )
     else:
         words = set(
-            ["play", "new", "game", "resume", "resign", "move", "from", "to"]
+            ["play", "new", "game", "resume", "resign", "move"]
             + list(SPOKEN_DIGITS_EN.keys())
             + _COLUMNS
-            + ["ay", "bee", "see", "dee", "ee", "eff", "gee", "age", "hey",
-               "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
-            + ["eight"]
+            + list(SPOKEN_COLUMNS_EN.keys())
             + ["magnus", "magnets", "[unk]"]
         )
     return sorted(list(words))

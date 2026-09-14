@@ -50,12 +50,42 @@ from wake_word import WakeWordDetector
 # Logging setup
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
-    format=config.LOG_FORMAT,
-    datefmt=config.LOG_DATE_FORMAT,
-    stream=sys.stdout,
-)
+SUCCESS_LEVEL = 25
+logging.addLevelName(SUCCESS_LEVEL, "SUCCESS")
+def success(self, message, *args, **kws):
+    if self.isEnabledFor(SUCCESS_LEVEL):
+        self._log(SUCCESS_LEVEL, message, args, **kws)
+logging.Logger.success = success
+
+class ColorFormatter(logging.Formatter):
+    default_color = "\x1b[39m"  # Default terminal color
+    yellow = "\x1b[33;20m"
+    red = "\x1b[31;20m"
+    green = "\x1b[32;20m"
+    reset = "\x1b[0m"
+
+    def __init__(self, fmt, datefmt):
+        super().__init__()
+        self.fmt = fmt
+        self.datefmt = datefmt
+        self.FORMATS = {
+            logging.DEBUG: self.default_color + self.fmt + self.reset,
+            logging.INFO: self.default_color + self.fmt + self.reset,
+            SUCCESS_LEVEL: self.green + self.fmt + self.reset,
+            logging.WARNING: self.yellow + self.fmt + self.reset,
+            logging.ERROR: self.red + self.fmt + self.reset,
+            logging.CRITICAL: self.red + self.fmt + self.reset
+        }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno, self.fmt)
+        formatter = logging.Formatter(log_fmt, self.datefmt)
+        return formatter.format(record)
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(ColorFormatter(config.LOG_FORMAT, config.LOG_DATE_FORMAT))
+logging.root.setLevel(getattr(logging, config.LOG_LEVEL, logging.INFO))
+logging.root.addHandler(handler)
 log = logging.getLogger(__name__)
 
 
@@ -98,11 +128,13 @@ class VoiceCommandPipeline:
         command_timeout: float = config.COMMAND_TIMEOUT_S,
         confirm_timeout: float = config.CONFIRM_TIMEOUT_S,
         language: str | None = None,
+        game_started: int = 0,
     ) -> None:
         self.language = language or config.LANGUAGE
         self._timeout = command_timeout
         self._confirm_timeout = confirm_timeout
         self._state = PipelineState.IDLE
+        self.game_started: int = game_started  # 0 = no game running, 1 = game in progress
 
         model_path = config.get_model_path(self.language)
         log.info("Initialising VoiceCommandPipeline (%s)...", self.language)
@@ -110,6 +142,7 @@ class VoiceCommandPipeline:
         log.info("  Confirm timeout : %.1f s", self._confirm_timeout)
         log.info("  Vosk model      : %s", model_path)
         log.info("  OWW model       : %s", config.OWW_MODEL_PATH)
+        log.info("  Game started    : %s", bool(self.game_started))
 
         # Load engines once
         self._stt = VoskSTTEngine(language=self.language)
@@ -179,7 +212,7 @@ class VoiceCommandPipeline:
 
         # 4. VALIDATE
         self._set_state(PipelineState.VALIDATE)
-        result = validate(command, reason=parse_error)
+        result = validate(command, reason=parse_error, game_started=self.game_started)
 
         if not result.get("valid", False):
             self._set_state(PipelineState.ERROR)
@@ -211,6 +244,15 @@ class VoiceCommandPipeline:
                 print(f"[{config.WAKE_WORD}] Command confirmed!")
             result["confirmed"] = True
             self._set_state(PipelineState.EMIT)
+            # Update game state based on the confirmed command
+            cmd = result.get("command", "")
+            if cmd in ("NEW_GAME", "RESUME_GAME"):
+                self.game_started = 1
+                log.info("Game state: STARTED (game_started=1)")
+            elif cmd == "RESIGN_GAME":
+                self.game_started = 0
+                log.info("Game state: ENDED (game_started=0)")
+            result["game_started"] = self.game_started
             return result
 
         elif confirmed is False:

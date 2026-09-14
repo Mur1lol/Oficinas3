@@ -163,26 +163,36 @@ class VoskSTTEngine:
                 if speech_started:
                     silence_count += 1
 
-            # After enough silence post-speech, flush the recognizer
+            # After enough silence post-speech, try to get a result
             if (
                 speech_started
                 and silence_count >= config.VAD_SILENCE_THRESHOLD
                 and frames_captured >= config.COMMAND_MIN_FRAMES
             ):
-                log.debug("[STT] End of %s speech detected.", label.lower())
-                break
+                result_json = json.loads(recognizer.FinalResult())
+                text = result_json.get("text", "").strip().lower()
 
-        # Retrieve final result
+                if text:
+                    log.success("[STT] %s recognised: '%s'", label, text)
+                    return text
+
+                # Empty transcript — reset and keep listening until deadline
+                log.debug("[STT] Empty %s segment, continuing...", label.lower())
+                recognizer.Reset()
+                speech_started = False
+                silence_count = 0
+                frames_captured = 0
+
+        # Timeout reached — try one last flush
         result_json = json.loads(recognizer.FinalResult())
         text = result_json.get("text", "").strip().lower()
 
         if text:
-            log.info("[STT] %s recognised: '%s'", label, text)
-        else:
-            log.warning("[STT] Empty %s transcript.", label.lower())
-            return None
+            log.success("[STT] %s recognised: '%s'", label, text)
+            return text
 
-        return text
+        log.warning("[STT] Empty %s transcript.", label.lower())
+        return None
 
     # ------------------------------------------------------------------
     # WAV file transcription
