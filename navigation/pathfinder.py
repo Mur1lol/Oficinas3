@@ -1,4 +1,4 @@
-﻿"""
+"""
 pathfinder.py
 =============
 Algoritmo de pathfinding no tabuleiro fisico 17x17.
@@ -26,10 +26,14 @@ ou None se o caminho nao existir / destino estiver ocupado.
 
 Algoritmo
 ---------
-Usa BFS (busca em largura) no grid 17x17 para garantir o caminho minimo.
+Usa A* com heuristica de distancia de Manhattan no grid 17x17.
+
+A* expande apenas as celulas mais promissoras (f = g + h), evitando
+explorar na direcao oposta ao destino -- ao contrario do BFS que
+explora em todas as direcoes igualmente.
 """
 
-from collections import deque
+import heapq
 from board import Board8x8, Board17x17, PIECE, BOARD_SIZE, PHYS_SIZE
 
 
@@ -67,14 +71,14 @@ def find_path(
         if not (0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE):
             raise ValueError(f"Coordenada de {name} ({r}, {c}) invalida para o tabuleiro 8x8.")
 
-    # Se destino ocupado, nao faz nada
-    if board8.get(ds_r, ds_c) == PIECE:
-        return None
-
-    # Se origem == destino, caminho trivial
+    # Se origem == destino, caminho trivial (antes de checar ocupacao)
     if origin == dest:
         pr, pc = board8.to_physical(or_r, or_c)
         return {"moves_x": [], "moves_y": [], "path": [(pr, pc)]}
+
+    # Se destino ocupado, nao faz nada
+    if board8.get(ds_r, ds_c) == PIECE:
+        return None
 
     # Constroi o grid fisico
     board17 = Board17x17(board8)
@@ -83,34 +87,53 @@ def find_path(
     start = board8.to_physical(or_r, or_c)
     goal  = board8.to_physical(ds_r, ds_c)
 
-    # BFS no grid 17x17
-    visited = {start: None}   # celula -> celula anterior (para reconstruir caminho)
-    queue   = deque([start])
+    # A* no grid 17x17
+    # f(n) = g(n) + h(n)
+    #   g = custo real acumulado (numero de passos)
+    #   h = heuristica de Manhattan ate o objetivo (admissivel e consistente)
 
-    while queue:
-        cur = queue.popleft()
+    def h(a: tuple) -> int:
+        return abs(a[0] - goal[0]) + abs(a[1] - goal[1])
+
+    # heap: (f, g, celula)
+    heap    = [(h(start), 0, start)]
+    came_from = {start: None}   # celula -> celula anterior
+    g_cost    = {start: 0}      # custo real ate cada celula
+
+    while heap:
+        f, g, cur = heapq.heappop(heap)
+
         if cur == goal:
             break
+
+        # Celula ja processada com custo menor (entrada obsoleta no heap)
+        if g > g_cost.get(cur, float('inf')):
+            continue
 
         cur_r, cur_c = cur
         for dr, dc in _DIRS:
             nr, nc = cur_r + dr, cur_c + dc
             nxt = (nr, nc)
 
-            if nxt in visited:
-                continue
-
-            # Celula destino: pode entrar mesmo sendo "casa", pois sabemos que esta vazia
+            # Celula destino: entrada permitida (sabemos que esta vazia)
             if nxt == goal:
-                visited[nxt] = cur
-                queue.append(nxt)
+                new_g = g + 1
+                if new_g < g_cost.get(nxt, float('inf')):
+                    g_cost[nxt]    = new_g
+                    came_from[nxt] = cur
+                    heapq.heappush(heap, (new_g + 0, new_g, nxt))  # h(goal)=0
                 continue
 
-            if board17.is_passable(nr, nc):
-                visited[nxt] = cur
-                queue.append(nxt)
+            if not board17.is_passable(nr, nc):
+                continue
 
-    if goal not in visited:
+            new_g = g + 1
+            if new_g < g_cost.get(nxt, float('inf')):
+                g_cost[nxt]    = new_g
+                came_from[nxt] = cur
+                heapq.heappush(heap, (new_g + h(nxt), new_g, nxt))
+
+    if goal not in came_from:
         return None  # Caminho inexistente
 
     # Reconstroi o caminho
@@ -118,7 +141,7 @@ def find_path(
     cur = goal
     while cur is not None:
         path.append(cur)
-        cur = visited[cur]
+        cur = came_from[cur]
     path.reverse()
 
     # Calcula vetores de movimento (delta entre celulas consecutivas)
