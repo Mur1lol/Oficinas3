@@ -1,4 +1,4 @@
-﻿"""
+"""
 demo.py
 =======
 Demonstracao interativa do pathfinding com notacao de xadrez e animacao no terminal.
@@ -23,7 +23,9 @@ import os
 import sys
 import time
 
-from board import Board8x8, Board17x17, PIECE, EMPTY, PHYS_SIZE, BOARD_SIZE
+from board import (Board8x8, Board17x17, PIECE, EMPTY,
+                   PHYS_ROWS, PHYS_COLS, BOARD_SIZE, BOARD_ROWS, BOARD_COLS,
+                   PHYS_SIZE, BOARD_SIZE)  # PHYS_SIZE/BOARD_SIZE mantidos por compat
 from pathfinder import find_path
 
 # ─── Constantes de animacao ───────────────────────────────────────────────────
@@ -128,7 +130,7 @@ def render_boards(board8: Board8x8, board17: Board17x17,
 
     # ── Cabecalho de colunas 8x8 ──
     hdr8  = "    " + "  ".join(f"{BOLD}{YELLOW}{c}{RESET}" for c in COL_LABELS)
-    hdr17 = "  " + " ".join(f"{BOLD}{YELLOW}{c:2d}{RESET}" for c in range(PHYS_SIZE))
+    hdr17 = "  " + " ".join(f"{BOLD}{YELLOW}{c:2d}{RESET}" for c in range(PHYS_COLS))
     lines.append(hdr8 + "      " + hdr17)
     lines.append("")
 
@@ -147,14 +149,14 @@ def render_boards(board8: Board8x8, board17: Board17x17,
 
     lines.append("")
 
-    # ── Grid fisico 17x17 (exibido abaixo) ──
-    lines.append(f"{BOLD}{CYAN}  Grid fisico 17x17:{RESET}")
-    lines.append("    " + " ".join(f"{BOLD}{YELLOW}{c:2d}{RESET}" for c in range(PHYS_SIZE)))
+    # ── Grid fisico 17x33 (exibido abaixo) ──
+    lines.append(f"{BOLD}{CYAN}  Grid fisico {PHYS_ROWS}x{PHYS_COLS}:{RESET}")
+    lines.append("    " + " ".join(f"{BOLD}{YELLOW}{c:2d}{RESET}" for c in range(PHYS_COLS)))
 
-    for pr in range(PHYS_SIZE):
+    for pr in range(PHYS_ROWS):
         row_str = f"{BOLD}{YELLOW}{pr:2d}{RESET}  "
         row_str += "".join(_cell_str(board17, pr, pc, robot_pos, trail_set)
-                           for pc in range(PHYS_SIZE))
+                           for pc in range(PHYS_COLS))
         lines.append(row_str)
 
     lines.append("")
