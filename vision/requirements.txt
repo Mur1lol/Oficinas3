@@ -1,0 +1,15 @@
+# VoiceChess Vision — Python dependencies
+#
+# Install with:
+#   pip install -r requirements_vision.txt
+#
+# System packages (Ubuntu/Debian/Raspberry Pi OS):
+#   sudo apt install libgl1-mesa-glx libglib2.0-0   # for headless OpenCV
+
+# ── Computer Vision ────────────────────────────────────────────────────────
+# opencv-python-headless: no Qt/GTK UI dependencies (lighter on Pi)
+# Use opencv-python instead if you need the interactive calibration window.
+opencv-python==4.9.0.80
+
+# numpy is required by OpenCV for array operations
+numpy==1.26.4
