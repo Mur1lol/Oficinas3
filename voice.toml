@@ -1,8 +1,8 @@
 [voice]
 language = "en-US"
-device_name = "USB Audio Device"
+device_name = "USB Audio Device: - (hw:1,0)"
 model_dir = "voice/models"
-capture_rate = 48000
+capture_rate = 44100
 command_timeout = 10.0
 confirmation_timeout = 10.0
 audio_timeout = 2.0
