@@ -1,0 +1,11 @@
+[voice]
+language = "en-US"
+device_name = "USB Audio Device"
+model_dir = "voice/models"
+capture_rate = 48000
+command_timeout = 10.0
+confirmation_timeout = 10.0
+audio_timeout = 2.0
+silence_ms = 600
+wake_backend = "vosk"
+log_level = "INFO"

@@ -7,13 +7,9 @@ Unit tests for voice/parser.py covering:
   - YES/NO and SIM/NÃO confirmation parsing
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pytest
-from parser import parse, parse_confirmation, MoveCommand, ActionCommand
 
+from voice.parser import ActionCommand, MoveCommand, parse, parse_confirmation
 
 # ---------------------------------------------------------------------------
 # Move Command Success Cases (EN and PT)

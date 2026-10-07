@@ -8,15 +8,11 @@ Run with:
     python -m pytest tests/test_validator.py -v
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pytest
-from parser import MoveCommand, ActionCommand
-from validator import validate, is_valid_square
-import config
 
+from voice import config
+from voice.parser import ActionCommand, MoveCommand
+from voice.validator import is_valid_square, validate
 
 # ---------------------------------------------------------------------------
 # is_valid_square
