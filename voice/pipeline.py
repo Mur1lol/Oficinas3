@@ -28,8 +28,10 @@ class VoiceResult:
 
     def to_dict(self):
         result = validate(self.command, self.reason)
-        result.update(confirmed=self.confirmed,
-                      valid=self.confirmed and self.reason is None and result["valid"])
+        result.update(
+            confirmed=self.confirmed,
+            valid=self.confirmed and self.reason is None and result["valid"],
+        )
         if self.reason:
             result["reason"] = self.reason
         return result
@@ -90,7 +92,9 @@ class VoiceCommandPipeline:
         answer = self.recognizer.listen(stream, "confirmation", self.settings.confirmation_timeout)
         confirmed = parse_confirmation(answer, self.settings.language)
         if confirmed is not True:
-            reason = "Command cancelled" if confirmed is False else "Confirmation missing or ambiguous"
+            reason = (
+                "Command cancelled" if confirmed is False else "Confirmation missing or ambiguous"
+            )
             return self._failure(command, reason)
         stream.check()
         self._set_state(PipelineState.EMIT, command)

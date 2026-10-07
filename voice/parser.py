@@ -25,22 +25,76 @@ Command = MoveCommand | ActionCommand
 DIGITS = dict(zip("one two three four five six seven eight".split(), "12345678", strict=True))
 DIGITS.update(zip("um dois tres quatro cinco seis sete oito".split(), "12345678", strict=True))
 COLUMNS = {
-    "alpha": "a", "alfa": "a", "ay": "a",
-    "bravo": "b", "bee": "b", "be": "b",
-    "charlie": "c", "see": "c", "ce": "c",
-    "delta": "d", "dee": "d", "de": "d",
-    "echo": "e", "eco": "e", "ee": "e",
-    "foxtrot": "f", "foxtrote": "f", "eff": "f",
-    "golf": "g", "gee": "g",
-    "hotel": "h", "aitch": "h", "aga": "h",
+    "alpha": "a",
+    "alfa": "a",
+    "ay": "a",
+    "bravo": "b",
+    "bee": "b",
+    "be": "b",
+    "charlie": "c",
+    "see": "c",
+    "ce": "c",
+    "delta": "d",
+    "dee": "d",
+    "de": "d",
+    "echo": "e",
+    "eco": "e",
+    "ee": "e",
+    "foxtrot": "f",
+    "foxtrote": "f",
+    "eff": "f",
+    "golf": "g",
+    "gee": "g",
+    "hotel": "h",
+    "aitch": "h",
+    "aga": "h",
 }
 ACTIONS = {
-    "NEW_GAME": ("play new game", "new game", "start game", "jogar novo jogo", "novo jogo", "iniciar jogo", "comecar jogo"),
-    "RESUME_GAME": ("resume game", "resume", "continue game", "continuar jogo", "retomar jogo", "continuar", "retomar"),
-    "RESIGN_GAME": ("resign game", "resign", "surrender", "desistir do jogo", "desistir", "abandonar jogo", "abandonar"),
+    "NEW_GAME": (
+        "play new game",
+        "new game",
+        "start game",
+        "jogar novo jogo",
+        "novo jogo",
+        "iniciar jogo",
+        "comecar jogo",
+    ),
+    "RESUME_GAME": (
+        "resume game",
+        "resume",
+        "continue game",
+        "continuar jogo",
+        "retomar jogo",
+        "continuar",
+        "retomar",
+    ),
+    "RESIGN_GAME": (
+        "resign game",
+        "resign",
+        "surrender",
+        "desistir do jogo",
+        "desistir",
+        "abandonar jogo",
+        "abandonar",
+    ),
 }
 MOVE_WORDS = {"move", "mova", "mover", "jogar", "mexe", "mexer"}
-FILLERS = {"from", "to", "the", "at", "on", "square", "de", "para", "pra", "ao", "casa", "o", "do", "da"}
+FILLERS = {
+    "from",
+    "to",
+    "the",
+    "at",
+    "on",
+    "square",
+    "de",
+    "para",
+    "pra",
+    "ao",
+    "casa",
+    "o",
+    "do",
+    "da",
+}
 YES = {"yes", "yeah", "yep", "confirm", "sim", "confirma", "confirmo", "positivo"}
 NO = {"no", "nope", "cancel", "nao", "cancela", "cancelar", "negativo"}
 

@@ -9,9 +9,19 @@ from voice.config import Settings, load_settings
 from voice.parser import ACTIONS, FILLERS, MOVE_WORDS, grammar
 
 
-@pytest.mark.parametrize("options", [{"language": "xx"}, {"command_timeout": 0},
-    {"confirmation_timeout": float("inf")}, {"device_name": ""}, {"capture_rate": 22050},
-    {"audio_timeout": -1}, {"silence_ms": 0}, {"wake_backend": "unknown"}])
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"language": "xx"},
+        {"command_timeout": 0},
+        {"confirmation_timeout": float("inf")},
+        {"device_name": ""},
+        {"capture_rate": 22050},
+        {"audio_timeout": -1},
+        {"silence_ms": 0},
+        {"wake_backend": "unknown"},
+    ],
+)
 def test_invalid_settings(options):
     with pytest.raises(ValueError):
         Settings(**options)
@@ -21,7 +31,7 @@ def test_config_paths_relative_to_file(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text('[voice]\nmodel_dir="models"\nlanguage="en-US"\n')
     assert load_settings(path).model_dir == tmp_path / "models"
-    path.write_text('[voice]\nunrecognised=true\n')
+    path.write_text("[voice]\nunrecognised=true\n")
     with pytest.raises(ValueError, match="Unknown"):
         load_settings(path)
 
@@ -46,7 +56,10 @@ def test_cli_has_only_three_commands():
 
 
 def test_devices_use_loguru(monkeypatch):
-    monkeypatch.setattr("voice.cli.list_audio_devices", lambda: [{"index": 1, "name": "USB", "defaultSampleRate": 48000}])
+    monkeypatch.setattr(
+        "voice.cli.list_audio_devices",
+        lambda: [{"index": 1, "name": "USB", "defaultSampleRate": 48000}],
+    )
     result = CliRunner().invoke(cli, ["devices"])
     assert result.exit_code == 0
     assert "USB" in result.output

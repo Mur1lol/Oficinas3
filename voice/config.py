@@ -45,7 +45,9 @@ class Settings:
 
     @property
     def model_path(self):
-        model = "vosk-model-small-en-us-0.15" if self.language == "en-US" else "vosk-model-small-pt-0.3"
+        model = (
+            "vosk-model-small-en-us-0.15" if self.language == "en-US" else "vosk-model-small-pt-0.3"
+        )
         return self.model_dir / model
 
 

@@ -14,8 +14,11 @@ def list_audio_devices() -> list[dict]:
 
     pa = pyaudio.PyAudio()
     try:
-        return [dict(pa.get_device_info_by_index(i)) for i in range(pa.get_device_count())
-                if pa.get_device_info_by_index(i)["maxInputChannels"] > 0]
+        return [
+            dict(pa.get_device_info_by_index(i))
+            for i in range(pa.get_device_count())
+            if pa.get_device_info_by_index(i)["maxInputChannels"] > 0
+        ]
     finally:
         pa.terminate()
 
@@ -39,7 +42,9 @@ class FrameConverter:
 
         if len(data) % 2:
             raise AudioError("Malformed PCM data")
-        self.pending.extend(self.resampler.resample_chunk(np.frombuffer(data, dtype="<i2")).tobytes())
+        self.pending.extend(
+            self.resampler.resample_chunk(np.frombuffer(data, dtype="<i2")).tobytes()
+        )
         frames = []
         while len(self.pending) >= FRAME_BYTES:
             frames.append(bytes(self.pending[:FRAME_BYTES]))
@@ -79,17 +84,27 @@ class AudioStream:
         try:
             self._converter = FrameConverter(self.settings.capture_rate)
             self._pa = pyaudio.PyAudio()
-            devices = [dict(self._pa.get_device_info_by_index(i))
-                       for i in range(self._pa.get_device_count())
-                       if self._pa.get_device_info_by_index(i)["maxInputChannels"] > 0]
+            devices = [
+                dict(self._pa.get_device_info_by_index(i))
+                for i in range(self._pa.get_device_count())
+                if self._pa.get_device_info_by_index(i)["maxInputChannels"] > 0
+            ]
             index = select_device(devices, self.settings.device_name)
-            self._pa.is_format_supported(self.settings.capture_rate, input_device=index,
-                                         input_channels=1, input_format=pyaudio.paInt16)
+            self._pa.is_format_supported(
+                self.settings.capture_rate,
+                input_device=index,
+                input_channels=1,
+                input_format=pyaudio.paInt16,
+            )
             self._stream = self._pa.open(
-                format=pyaudio.paInt16, channels=1, rate=self.settings.capture_rate,
-                input=True, input_device_index=index,
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self.settings.capture_rate,
+                input=True,
+                input_device_index=index,
                 frames_per_buffer=self.settings.capture_rate * FRAME_MS // 1000,
-                stream_callback=self._callback, start=False,
+                stream_callback=self._callback,
+                start=False,
             )
             self._active = True
             self._stream.start_stream()

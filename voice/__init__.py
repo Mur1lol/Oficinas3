@@ -4,5 +4,10 @@ from .parser import ActionCommand, Command, MoveCommand
 from .pipeline import PipelineState, VoiceCommandPipeline, VoiceResult
 
 __all__ = [
-    "ActionCommand", "Command", "MoveCommand", "PipelineState", "VoiceCommandPipeline", "VoiceResult"
+    "ActionCommand",
+    "Command",
+    "MoveCommand",
+    "PipelineState",
+    "VoiceCommandPipeline",
+    "VoiceResult",
 ]

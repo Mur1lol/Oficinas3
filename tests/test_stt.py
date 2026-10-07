@@ -43,8 +43,9 @@ def test_stt_preserves_partial_and_final_results(monkeypatch):
 
 
 def test_wake_word_requires_whole_utterance(monkeypatch):
-    engine, stream, _ = fake_engine(monkeypatch, [1, 0, 0, 0, 1, 0, 0, 0],
-                                    ["magnus move e2", "magnus"])
+    engine, stream, _ = fake_engine(
+        monkeypatch, [1, 0, 0, 0, 1, 0, 0, 0], ["magnus move e2", "magnus"]
+    )
     assert engine.listen(stream, "wake", None) == "magnus"
 
 

@@ -18,7 +18,9 @@ from voice.pipeline import VoiceCommandPipeline
 def main():
     logger.remove()
     logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}")
-    logger.add("/tmp/voicechess-bench.log", mode="w", format="{time:HH:mm:ss} | {level} | {message}")
+    logger.add(
+        "/tmp/voicechess-bench.log", mode="w", format="{time:HH:mm:ss} | {level} | {message}"
+    )
     settings = load_settings()
     pipeline = VoiceCommandPipeline(settings, on_state=report_state)
     duration = float(os.environ.get("VOICE_BENCH_SECONDS", "600"))
@@ -60,10 +62,16 @@ def main():
         logger.info(
             "BENCH elapsed={:.2f}s cpu_one_core={:.2f}% peak_rss={:.2f}MiB "
             "frames={} samples={} rms={:.2f} peak={} clipping={:.6f}% confirmed={} rejected={}",
-            elapsed, (time.process_time() - cpu) / elapsed * 100,
+            elapsed,
+            (time.process_time() - cpu) / elapsed * 100,
             resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024,
-            frames, count, math.sqrt(energy / count) if count else 0,
-            peak, clipped / count * 100 if count else 0, confirmed, rejected,
+            frames,
+            count,
+            math.sqrt(energy / count) if count else 0,
+            peak,
+            clipped / count * 100 if count else 0,
+            confirmed,
+            rejected,
         )
 
 

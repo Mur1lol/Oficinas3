@@ -39,23 +39,45 @@ def test_complete_cycle_and_led_callback():
     states = []
     stream = Stream()
     engine = Recognizer("magnus", "move echo two echo four", "yes")
-    pipeline = VoiceCommandPipeline(Settings(), recognizer=engine,
-                                   on_state=lambda state, cmd: states.append((state, cmd)))
+    pipeline = VoiceCommandPipeline(
+        Settings(), recognizer=engine, on_state=lambda state, cmd: states.append((state, cmd))
+    )
     result = pipeline.listen_once(stream)
     assert result == VoiceResult(MoveCommand("E2", "E4"), True)
-    assert result.to_dict() == {"wake_word": "MAGNUS", "command": "MOVE", "from": "E2",
-                                "to": "E4", "valid": True, "confirmed": True}
+    assert result.to_dict() == {
+        "wake_word": "MAGNUS",
+        "command": "MOVE",
+        "from": "E2",
+        "to": "E4",
+        "valid": True,
+        "confirmed": True,
+    }
     assert stream.discards == 3
     assert engine.stages == ["wake", "command", "confirmation"]
-    assert [s for s, _ in states] == [PipelineState.WAKE_WORD_LISTEN, PipelineState.COMMAND_LISTEN,
-                                     PipelineState.PARSE, PipelineState.VALIDATE,
-                                     PipelineState.CONFIRMATION_LISTEN, PipelineState.EMIT]
+    assert [s for s, _ in states] == [
+        PipelineState.WAKE_WORD_LISTEN,
+        PipelineState.COMMAND_LISTEN,
+        PipelineState.PARSE,
+        PipelineState.VALIDATE,
+        PipelineState.CONFIRMATION_LISTEN,
+        PipelineState.EMIT,
+    ]
     assert states[-2][1] == result.command
 
 
-@pytest.mark.parametrize("text,answer", [("move e2 e4", "no"), ("move e2 e4", None),
-    ("move e2 e4", "yes no"), ("move e2 e4", "yes [unk]"), (None, None),
-    ("move e2 e4 a1", "yes"), ("move e2 e2", "yes"), ("move i2 e4", "yes")])
+@pytest.mark.parametrize(
+    "text,answer",
+    [
+        ("move e2 e4", "no"),
+        ("move e2 e4", None),
+        ("move e2 e4", "yes no"),
+        ("move e2 e4", "yes [unk]"),
+        (None, None),
+        ("move e2 e4 a1", "yes"),
+        ("move e2 e2", "yes"),
+        ("move i2 e4", "yes"),
+    ],
+)
 def test_failures_never_emit(text, answer):
     pipeline = VoiceCommandPipeline(Settings(), recognizer=Recognizer("magnus", text, answer))
     result = pipeline.listen_once(Stream())
@@ -96,13 +118,24 @@ def test_cycles_are_independent_of_game_phase():
     assert not hasattr(pipeline, "game_started")
 
 
-@pytest.mark.parametrize("text", ["yes no", "yesterday", "similarly", "noise yes", "don't confirm", "yes [unk]"])
+@pytest.mark.parametrize(
+    "text", ["yes no", "yesterday", "similarly", "noise yes", "don't confirm", "yes [unk]"]
+)
 def test_ambiguous_confirmation(text):
     assert parse_confirmation(text) is None
 
 
-@pytest.mark.parametrize("text", ["move e2 e4 a1", "move e2 e4 maybe", "do not move e2 e4",
-    "new game then resign", "move i2 e2 e4", "move e2 e4 and move d2 d4"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "move e2 e4 a1",
+        "move e2 e4 maybe",
+        "do not move e2 e4",
+        "new game then resign",
+        "move i2 e2 e4",
+        "move e2 e4 and move d2 d4",
+    ],
+)
 def test_ambiguous_command(text):
     assert parse(text)[0] is None
 

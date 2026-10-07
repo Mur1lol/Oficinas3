@@ -64,7 +64,9 @@ def devices(ctx):
     """List microphone names to use in the TOML configuration."""
     try:
         for device in list_audio_devices():
-            logger.info("{} | {} | {} Hz", int(device["index"]), device["name"], device["defaultSampleRate"])
+            logger.info(
+                "{} | {} | {} Hz", int(device["index"]), device["name"], device["defaultSampleRate"]
+            )
     except Exception as error:
         logger.error("Could not list microphones: {}", error)
         ctx.exit(1)

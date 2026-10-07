@@ -22,8 +22,11 @@ class VoskSTTEngine:
         logger.info("Loading Vosk model: {}", settings.model_path)
         self.model = Model(str(settings.model_path))
         self.recognizers = {
-            stage: KaldiRecognizer(self.model, SAMPLE_RATE,
-                                   json.dumps(grammar(stage, settings.language), ensure_ascii=False))
+            stage: KaldiRecognizer(
+                self.model,
+                SAMPLE_RATE,
+                json.dumps(grammar(stage, settings.language), ensure_ascii=False),
+            )
             for stage in ("wake", "command", "confirmation")
         }
         self.vad = webrtcvad.Vad(2)
@@ -77,7 +80,12 @@ class VoskSTTEngine:
         recognizer.Reset()
         parts = []
         with wave.open(str(path), "rb") as source:
-            if (source.getnchannels(), source.getsampwidth(), source.getframerate(), source.getcomptype()) != (1, 2, SAMPLE_RATE, "NONE"):
+            if (
+                source.getnchannels(),
+                source.getsampwidth(),
+                source.getframerate(),
+                source.getcomptype(),
+            ) != (1, 2, SAMPLE_RATE, "NONE"):
                 raise ValueError("WAV must be uncompressed mono, 16-bit, 16000 Hz")
             while data := source.readframes(SAMPLE_RATE * FRAME_MS // 1000):
                 if recognizer.AcceptWaveform(data):

@@ -22,8 +22,12 @@ def main():
             if not chunks:
                 raise RuntimeError("No microphone frames")
             samples = np.concatenate(chunks).astype(float)
-            logger.info("MIC dc={:.1f} speech_rms={:.1f} peak={:.0f}", samples.mean(),
-                        samples.std(), np.abs(samples).max())
+            logger.info(
+                "MIC dc={:.1f} speech_rms={:.1f} peak={:.0f}",
+                samples.mean(),
+                samples.std(),
+                np.abs(samples).max(),
+            )
 
 
 if __name__ == "__main__":

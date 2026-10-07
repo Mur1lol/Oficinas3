@@ -17,10 +17,14 @@ def pa(monkeypatch):
     driver = Mock()
     driver.get_device_count.return_value = 1
     driver.get_device_info_by_index.return_value = {
-        "index": 0, "name": "USB Audio Device", "maxInputChannels": 1}
+        "index": 0,
+        "name": "USB Audio Device",
+        "maxInputChannels": 1,
+    }
     driver.open.return_value = stream
-    module = SimpleNamespace(paInt16=8, paComplete=1, paContinue=0, paAbort=2,
-                             PyAudio=Mock(return_value=driver))
+    module = SimpleNamespace(
+        paInt16=8, paComplete=1, paContinue=0, paAbort=2, PyAudio=Mock(return_value=driver)
+    )
     monkeypatch.setitem(sys.modules, "pyaudio", module)
     return driver, stream, module
 
@@ -35,7 +39,9 @@ def test_streaming_conversion_preserves_fragmented_samples(rate):
         fragmented.extend(converter.feed(chunk.tobytes()))
     np.testing.assert_allclose(
         np.frombuffer(b"".join(full), dtype="<i2").astype(float),
-        np.frombuffer(b"".join(fragmented), dtype="<i2"), atol=2, rtol=0,
+        np.frombuffer(b"".join(fragmented), dtype="<i2"),
+        atol=2,
+        rtol=0,
     )
     assert all(len(frame) == FRAME_BYTES for frame in fragmented)
     assert 30 <= len(fragmented) <= 33
