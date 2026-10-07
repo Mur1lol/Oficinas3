@@ -1,0 +1,17 @@
+[project]
+name = "voicechess"
+version = "2.0.0"
+description = "ChessAI 2.0 — Voice Command System for Raspberry Pi"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "PyAudio==0.2.14",
+    "vosk==0.3.45",
+    "webrtcvad==2.0.10",
+    "openwakeword==0.6.0",
+    "onnxruntime==1.18.0",
+    "numpy==1.26.4",
+    "setuptools<71",
+]
+
+[tool.uv]
+python-preference = "only-managed"
