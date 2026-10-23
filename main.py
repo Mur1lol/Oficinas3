@@ -716,70 +716,193 @@ def apply_skill(engine, nivel):
 
 # ─── Tela de Configuracao ────────────────────────────────────────────────────
 
-def setup():
-    _enable(); hide(); clr()
-    print(f"""
- {BD}{CY}╔══════════════════════════════════════════════╗
- ║     Chess Robot  --  Nova Partida           ║
- ╠══════════════════════════════════════════════╣{RS}
+# Modos de jogo
+MODE_PVE        = "pve"   # Humano vs Stockfish
+MODE_PVP_AUTO   = "pvp_auto"    # PvP: ambos usam comando de voz (automatico)
+MODE_PVP_WHITE  = "pvp_white"   # PvP: brancas jogam manualmente (camera)
+MODE_PVP_BLACK  = "pvp_black"   # PvP: pretas jogam manualmente (camera)
 
- {BD}Nivel do Stockfish:{RS}
-   {YL}1{RS} - Iniciante      (ELO ~800)
-   {YL}2{RS} - Basico         (ELO ~1000)
-   {YL}3{RS} - Intermediario  (ELO ~1200)
-   {YL}4{RS} - Avancado       (ELO ~1500)
-   {YL}5{RS} - Expert         (ELO ~1700)
-   {YL}6{RS} - Mestre         (ELO ~2000)
-   {YL}7{RS} - Gran-Mestre    (ELO ~2300)
-   {YL}8{RS} - Motor Completo (sem limite)
+def _ask(prompt, valid):
+    """Loop simples de input com validacao."""
+    while True:
+        show()
+        r = input(prompt).strip().upper()
+        hide()
+        if r in valid:
+            return r
+        print(f"  {RD}Opcao invalida. Tente novamente.{RS}")
 
- {BD}Robo inicia em:{RS} logico={ROBOT_HOME}  fisico={l2p(*ROBOT_HOME)}
-
- {BD}{CY}╠══════════════════════════════════════════════╣{RS}
- {BD}Sinais:{RS} PICKUP/RELEASE sao emitidos automaticamente.
- {BD}Lance UCI:{RS} {YL}e2e4{RS}  {YL}e1g1{RS}(roque)  {YL}e7e8q{RS}(promocao)
- {BD}{CY}╚══════════════════════════════════════════════╝{RS}
-""")
-    show()
-
+def _ask_int(prompt, lo, hi):
+    """Loop simples de input numerico."""
     while True:
         try:
-            n = int(input(f"  {BD}Nivel (1-8):{RS} ").strip())
-            if 1 <= n <= 8: break
-            print(f"  {RD}Digite entre 1 e 8.{RS}")
+            show()
+            n = int(input(prompt).strip())
+            hide()
+            if lo <= n <= hi:
+                return n
         except ValueError:
-            print(f"  {RD}Entrada invalida.{RS}")
-    _, _, desc = SKILL_MAP[n]
-    print(f"\n  {GR}Nivel: {desc}{RS}\n")
+            pass
+        print(f"  {RD}Digite um numero entre {lo} e {hi}.{RS}")
 
-    print(f"  {BD}Voce joga como:{RS}")
-    print(f"    {YL}B{RS} - Brancas (voce joga primeiro)")
-    print(f"    {YL}N{RS} - Negras  (Stockfish joga primeiro)")
-    while True:
-        c = input(f"  {BD}Cor (B/N):{RS} ").strip().upper()
-        if c in ("B","N"): break
-        print(f"  {RD}Digite B ou N.{RS}")
-    human_color = chess.WHITE if c=="B" else chess.BLACK
-    print(f"\n  {GR}Voce: {'Brancas' if human_color==chess.WHITE else 'Negras'}{RS}\n")
+def _header():
+    clr()
+    print(f"""
+ {BD}{CY}╔══════════════════════════════════════════════╗
+ ║       Chess Robot  --  Nova Partida         ║
+ ╠══════════════════════════════════════════════╣{RS}
+ {BD}Robo inicia em:{RS} logico={ROBOT_HOME}  fisico={l2p(*ROBOT_HOME)}
+ {BD}Sinais:{RS} PICKUP/RELEASE sao emitidos automaticamente.
+ {BD}{CY}╠══════════════════════════════════════════════╣{RS}
+""")
 
+def _ask_speed():
     print(f"  {BD}Velocidade da animacao:{RS}")
     print(f"    {YL}1{RS} - Lenta  (0.15s/frame)")
     print(f"    {YL}2{RS} - Normal (0.07s/frame)")
     print(f"    {YL}3{RS} - Rapida (0.02s/frame)")
-    while True:
-        try:
-            v = int(input(f"  {BD}Velocidade (1-3):{RS} ").strip())
-            if 1 <= v <= 3: break
-        except ValueError: pass
-        print(f"  {RD}Digite 1, 2 ou 3.{RS}")
+    v = _ask_int(f"  {BD}Velocidade (1-3):{RS} ", 1, 3)
+    return {1: 0.15, 2: 0.07, 3: 0.02}[v]
+
+def _ask_skill():
+    print(f"  {BD}Nivel do Stockfish:{RS}")
+    print(f"    {YL}1{RS} - Iniciante      (ELO ~800)")
+    print(f"    {YL}2{RS} - Basico         (ELO ~1000)")
+    print(f"    {YL}3{RS} - Intermediario  (ELO ~1200)")
+    print(f"    {YL}4{RS} - Avancado       (ELO ~1500)")
+    print(f"    {YL}5{RS} - Expert         (ELO ~1700)")
+    print(f"    {YL}6{RS} - Mestre         (ELO ~2000)")
+    print(f"    {YL}7{RS} - Gran-Mestre    (ELO ~2300)")
+    print(f"    {YL}8{RS} - Motor Completo (sem limite)")
+    n = _ask_int(f"  {BD}Nivel (1-8):{RS} ", 1, 8)
+    _, _, desc = SKILL_MAP[n]
+    print(f"\n  {GR}Nivel selecionado: {desc}{RS}\n")
+    return n
+
+def setup():
+    """
+    Menu de configuracao em arvore:
+
+      PvE ─┬─ Dificuldade (1-8)
+           └─ Cor do jogador (Brancas por padrao)
+
+      PvP ─┬─ Automatico  (ambos usam comando de voz)
+           ├─ Brancas manual (camera valida lancamento fisico)
+           └─ Pretas manual  (camera valida lancamento fisico)
+
+    Retorna:
+      modo        : MODE_PVE | MODE_PVP_AUTO | MODE_PVP_WHITE | MODE_PVP_BLACK
+      nivel       : nivel do Stockfish (1-8) para PvE, None para PvP
+      human_color : chess.WHITE / chess.BLACK para PvE, None para PvP auto,
+                    chess.WHITE (brancas manuais) ou chess.BLACK (pretas manuais)
+      frame_delay : delay de animacao em segundos
+    """
+    _enable(); hide()
+
+    # ── 1. Modo de jogo ──────────────────────────────────────────────────────
+    _header()
+    print(f"  {BD}Modo de jogo:{RS}")
+    print(f"    {YL}1{RS} - PvE  (Jogador vs Stockfish)")
+    print(f"    {YL}2{RS} - PvP  (Dois jogadores)")
+    modo_raw = _ask_int(f"  {BD}Modo (1/2):{RS} ", 1, 2)
+
+    # ── 2a. PvE ──────────────────────────────────────────────────────────────
+    if modo_raw == 1:
+        _header()
+        nivel = _ask_skill()
+        print()
+
+        print(f"  {BD}Voce joga como:{RS}")
+        print(f"    {YL}B{RS} - Brancas (voce joga primeiro)  {DM}[padrao]{RS}")
+        print(f"    {YL}N{RS} - Negras  (Stockfish joga primeiro)")
+        c = _ask(f"  {BD}Cor (B/N) [B]:{RS} ", ("B", "N", ""))
+        if c == "":
+            c = "B"
+        human_color = chess.WHITE if c == "B" else chess.BLACK
+        print(f"\n  {GR}Voce: {'Brancas' if human_color == chess.WHITE else 'Negras'}{RS}\n")
+
+        speed = _ask_speed()
+        hide()
+        return MODE_PVE, nivel, human_color, speed
+
+    # ── 2b. PvP ──────────────────────────────────────────────────────────────
+    _header()
+    print(f"  {BD}Modo PvP:{RS}")
+    print(f"    {YL}1{RS} - Automatico   (ambos usam comando de voz)")
+    print(f"    {YL}2{RS} - Brancas manual  {DM}(camera valida o tabuleiro fisico){RS}")
+    print(f"    {YL}3{RS} - Pretas manual   {DM}(camera valida o tabuleiro fisico){RS}")
+    pvp_raw = _ask_int(f"  {BD}Opcao (1-3):{RS} ", 1, 3)
+
+    if pvp_raw == 1:
+        modo = MODE_PVP_AUTO
+        human_color = None
+        print(f"\n  {GR}Modo: PvP Automatico (ambos via voz){RS}\n")
+    elif pvp_raw == 2:
+        modo = MODE_PVP_WHITE
+        human_color = chess.WHITE
+        print(f"\n  {GR}Modo: Brancas manual + Pretas automaticas (voz){RS}\n")
+    else:
+        modo = MODE_PVP_BLACK
+        human_color = chess.BLACK
+        print(f"\n  {GR}Modo: Pretas manual + Brancas automaticas (voz){RS}\n")
+
+    if pvp_raw in (2, 3):
+        print(f"  {YL}[AVISO]{RS} Validacao pelo tabuleiro fisico (camera) ainda nao implementada.")
+        print(f"  {DM}         Lance do jogador manual deve ser informado via UCI por enquanto.{RS}\n")
+
+    speed = _ask_speed()
     hide()
-    return n, human_color, {1:0.15, 2:0.07, 3:0.02}[v]
+    return modo, None, human_color, speed
+
+# ─── Entrada Manual (UCI via terminal) ────────────────────────────────────────
+
+def _read_manual_move(state, eval_s, label=""):
+    """
+    Aguarda o jogador digitar o lance em formato UCI.
+    Retorna chess.Move valido ou None (para encerrar).
+    """
+    prefix = f"[{label}] " if label else ""
+    home()
+    print(render(state,
+                 msg=f"  {BD}{prefix}Seu lance (UCI | 'q' para sair):{RS} ",
+                 eval_s=eval_s),
+          end="", flush=True)
+    show()
+    try:
+        raw = input("  > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    hide()
+
+    if raw in ("q", "quit", "exit", "sair"):
+        return None
+    try:
+        mv = chess.Move.from_uci(raw)
+        if mv not in state.cb.legal_moves:
+            draw(state, msg=f"{RD}Lance ilegal: '{raw}'.{RS}", eval_s=eval_s)
+            time.sleep(1.5)
+            return False   # sinaliza "tente de novo"
+        if not is_phys_valid(state, state.cb, mv):
+            pname = _PNAME.get(mv.promotion, "?")
+            draw(state,
+                 msg=f"{RD}Promocao invalida: nenhum(a) {pname} capturado "
+                     f"disponivel no cemiterio.{RS}",
+                 eval_s=eval_s)
+            time.sleep(2)
+            return False
+    except ValueError:
+        draw(state,
+             msg=f"{RD}UCI invalido: '{raw}'.{RS}  Ex: {YL}e2e4  e1g1  e7e8q{RS}",
+             eval_s=eval_s)
+        time.sleep(1.5)
+        return False
+    return mv
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     global FRAME_DELAY, SIGNAL_PAUSE
-    nivel, human_color, FRAME_DELAY = setup()
+    modo, nivel, human_color, FRAME_DELAY = setup()
     SIGNAL_PAUSE = max(0.15, FRAME_DELAY * 3)
 
     clr()
@@ -790,13 +913,34 @@ def main():
         print(f"\n{RD}Stockfish nao encontrado:{RS}\n  {sf_path}")
         return
 
-    try:
-        engine = chess.engine.SimpleEngine.popen_uci(sf_path)
-    except Exception as e:
-        show(); print(f"\n{RD}Erro ao abrir Stockfish:{RS} {e}"); return
+    # PvP automatico nao precisa do Stockfish
+    engine = None
+    desc   = "---"
+    nivel_pvp = 5   # nivel padrao do Stockfish como auxiliar PvP (pode ajustar)
+    if modo in (MODE_PVE, MODE_PVP_WHITE, MODE_PVP_BLACK):
+        try:
+            engine = chess.engine.SimpleEngine.popen_uci(sf_path)
+        except Exception as e:
+            show(); print(f"\n{RD}Erro ao abrir Stockfish:{RS} {e}"); return
+        if modo == MODE_PVE:
+            apply_skill(engine, nivel)
+            _, _, desc = SKILL_MAP[nivel]
+        else:
+            apply_skill(engine, nivel_pvp)
+            _, _, desc = SKILL_MAP[nivel_pvp]
 
-    apply_skill(engine, nivel)
-    _, _, desc = SKILL_MAP[nivel]
+    # Mensagem inicial de acordo com o modo
+    if modo == MODE_PVE:
+        inicio_msg = (f"{BD}{GR}PvE iniciado!  Bot: {desc}  "
+                      f"Voce: {'Brancas' if human_color == chess.WHITE else 'Negras'}{RS}")
+    elif modo == MODE_PVP_AUTO:
+        inicio_msg = f"{BD}{GR}PvP Automatico iniciado! (ambos via comando de voz){RS}"
+    elif modo == MODE_PVP_WHITE:
+        inicio_msg = (f"{BD}{GR}PvP: Brancas manual + Pretas automaticas (voz){RS}  "
+                      f"{DM}[camera pendente]{RS}")
+    else:  # MODE_PVP_BLACK
+        inicio_msg = (f"{BD}{GR}PvP: Pretas manual + Brancas automaticas (voz){RS}  "
+                      f"{DM}[camera pendente]{RS}")
 
     state  = GameState()
     eval_s = ""
@@ -804,65 +948,76 @@ def main():
 
     try:
         clr()
-        draw(state,
-             msg=f"{BD}{GR}Partida iniciada!  Nivel: {desc}  "
-                 f"Voce: {'Brancas' if human_color==chess.WHITE else 'Negras'}{RS}")
-        time.sleep(1.2)
+        draw(state, msg=inicio_msg)
+        time.sleep(1.5)
 
         while not state.cb.is_game_over():
-            is_human = (state.cb.turn == human_color)
+            current_turn = state.cb.turn   # chess.WHITE ou chess.BLACK
 
-            if is_human:
-                home()
-                print(render(state,
-                             msg=f"  {BD}Seu lance (UCI | 'q' para sair):{RS} ",
-                             eval_s=eval_s),
-                      end="", flush=True)
-                show()
-                try:
-                    raw = input("  > ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    break
-                hide()
+            # ── Determina quem age neste turno ──────────────────────────────
+            if modo == MODE_PVE:
+                # Jogador humano vs Stockfish
+                is_manual = (current_turn == human_color)
+                is_bot    = not is_manual
+                is_voice  = False
 
-                if raw in ("q","quit","exit","sair"):
+            elif modo == MODE_PVP_AUTO:
+                # Ambos automaticos (voz) - por ora Stockfish para ambos os lados
+                is_manual = False
+                is_bot    = True
+                is_voice  = True
+
+            elif modo == MODE_PVP_WHITE:
+                # Brancas = manual, Pretas = automatico (voz / Stockfish)
+                is_manual = (current_turn == chess.WHITE)
+                is_bot    = not is_manual
+                is_voice  = is_bot
+
+            else:  # MODE_PVP_BLACK
+                # Pretas = manual, Brancas = automatico (voz / Stockfish)
+                is_manual = (current_turn == chess.BLACK)
+                is_bot    = not is_manual
+                is_voice  = is_bot
+
+            # ── Turno manual (input UCI; futuramente: camera) ────────────────
+            if is_manual:
+                side_label = "Brancas" if current_turn == chess.WHITE else "Pretas"
+                mv = False
+                while mv is False:
+                    mv = _read_manual_move(state, eval_s, label=side_label)
+                if mv is None:
                     break
-                try:
-                    mv = chess.Move.from_uci(raw)
-                    if mv not in state.cb.legal_moves:
-                        draw(state,
-                             msg=f"{RD}Lance ilegal: '{raw}'.{RS}", eval_s=eval_s)
-                        time.sleep(1.5); continue
-                    # Verifica disponibilidade fisica para promocoes
-                    if not is_phys_valid(state, state.cb, mv):
-                        pname = _PNAME.get(mv.promotion, "?")
-                        draw(state,
-                             msg=f"{RD}Promocao invalida: nenhum(a) {pname} capturado "
-                                 f"disponivel no cemiterio.{RS}", eval_s=eval_s)
-                        time.sleep(2); continue
-                except ValueError:
-                    draw(state,
-                         msg=f"{RD}UCI invalido: '{raw}'.{RS}  "
-                             f"Ex: {YL}e2e4  e1g1  e7e8q{RS}", eval_s=eval_s)
-                    time.sleep(1.5); continue
-                _, eval_s = sf_best(engine, state.cb, state=state, tempo=0.1)
+                _, eval_s = sf_best(engine, state.cb, state=state, tempo=0.1) if engine else (None, eval_s)
+
+            # ── Turno automatico (Stockfish ou, futuramente, comando de voz) ─
             else:
-                draw(state, msg=f"{DM}Stockfish ({desc}) pensando...{RS}", eval_s=eval_s)
+                side_s = "Brancas" if current_turn == chess.WHITE else "Pretas"
+                if is_voice:
+                    draw(state,
+                         msg=f"{DM}{side_s}: aguardando comando de voz... "
+                             f"{YL}[voz nao implementada - usando Stockfish]{RS}",
+                         eval_s=eval_s)
+                else:
+                    draw(state,
+                         msg=f"{DM}Stockfish ({desc}) pensando...{RS}",
+                         eval_s=eval_s)
                 mv, eval_s = sf_best(engine, state.cb, state=state, tempo=tempo)
-                if mv is None: break
+                if mv is None:
+                    break
 
             execute_move(state, mv, eval_s)
 
+        # ── Fim de partida ───────────────────────────────────────────────────
         outcome = state.cb.outcome()
         if outcome:
-            if outcome.winner==chess.WHITE:
-                end_msg=f"{BD}{WH}Brancas vencem!{RS} ({outcome.termination.name})"
-            elif outcome.winner==chess.BLACK:
-                end_msg=f"{BD}{RD}Negras vencem!{RS} ({outcome.termination.name})"
+            if outcome.winner == chess.WHITE:
+                end_msg = f"{BD}{WH}Brancas vencem!{RS} ({outcome.termination.name})"
+            elif outcome.winner == chess.BLACK:
+                end_msg = f"{BD}{RD}Negras vencem!{RS} ({outcome.termination.name})"
             else:
-                end_msg=f"{BD}{YL}Empate!{RS} ({outcome.termination.name})"
+                end_msg = f"{BD}{YL}Empate!{RS} ({outcome.termination.name})"
         else:
-            end_msg=f"{BD}{CY}Encerrado. Resultado: {state.cb.result()}{RS}"
+            end_msg = f"{BD}{CY}Encerrado. Resultado: {state.cb.result()}{RS}"
 
         draw(state, msg=end_msg, eval_s=eval_s)
         show()
@@ -871,7 +1026,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        engine.quit(); show(); clr()
+        if engine:
+            engine.quit()
+        show(); clr()
         print(f"\n{BD}Lances jogados: {len(state.move_log)}{RS}")
         if state.move_log:
             print("Partida:", " ".join(m["san"] for m in state.move_log))
