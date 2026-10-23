@@ -8,26 +8,35 @@ Run with:
     python -m pytest tests/test_validator.py -v
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pytest
-from parser import MoveCommand, ActionCommand
-from validator import validate, is_valid_square
-import config
 
+from voice import config
+from voice.parser import ActionCommand, MoveCommand
+from voice.validator import is_valid_square, validate
 
 # ---------------------------------------------------------------------------
 # is_valid_square
 # ---------------------------------------------------------------------------
 
 VALID_SQUARES = [
-    "A1", "A8", "H1", "H8",   # corners
-    "E2", "E4", "G1", "F3",   # common moves
-    "a1", "h8", "e2", "d4",   # lowercase
-    "B2", "C3", "D4", "F6",   # mid-board
+    "A1",
+    "A8",
+    "H1",
+    "H8",  # corners
+    "E2",
+    "E4",
+    "G1",
+    "F3",  # common moves
+    "a1",
+    "h8",
+    "e2",
+    "d4",  # lowercase
+    "B2",
+    "C3",
+    "D4",
+    "F6",  # mid-board
 ]
+
 
 @pytest.mark.parametrize("sq", VALID_SQUARES)
 def test_is_valid_square_ok(sq):
@@ -37,29 +46,29 @@ def test_is_valid_square_ok(sq):
 
 
 INVALID_SQUARES = [
-    ("I1",  "column"),      # column I doesn't exist
-    ("A9",  "row"),         # row 9 doesn't exist
-    ("A0",  "row"),         # row 0 doesn't exist
-    ("Z5",  "column"),      # column Z doesn't exist
-    ("E",   "2 characters"),# too short
-    ("E2E4","2 characters"),# too long
-    ("",    "2 characters"),# empty
-    ("11",  "column"),      # not a letter for col
-    ("EE",  "row"),         # not a digit for row
+    ("I1", "column"),  # column I doesn't exist
+    ("A9", "row"),  # row 9 doesn't exist
+    ("A0", "row"),  # row 0 doesn't exist
+    ("Z5", "column"),  # column Z doesn't exist
+    ("E", "2 characters"),  # too short
+    ("E2E4", "2 characters"),  # too long
+    ("", "2 characters"),  # empty
+    ("11", "column"),  # not a letter for col
+    ("EE", "row"),  # not a digit for row
 ]
+
 
 @pytest.mark.parametrize("sq, fragment", INVALID_SQUARES)
 def test_is_valid_square_fail(sq, fragment):
     ok, err = is_valid_square(sq)
     assert ok is False, f"Expected {sq!r} to be invalid"
-    assert fragment.lower() in err.lower(), (
-        f"Expected '{fragment}' in error: {err!r}"
-    )
+    assert fragment.lower() in err.lower(), f"Expected '{fragment}' in error: {err!r}"
 
 
 # ---------------------------------------------------------------------------
 # validate() — success path
 # ---------------------------------------------------------------------------
+
 
 def test_validate_success_basic():
     cmd = MoveCommand("E2", "E4")
@@ -71,14 +80,17 @@ def test_validate_success_basic():
     assert result["to"] == "E4"
 
 
-@pytest.mark.parametrize("from_sq, to_sq", [
-    ("A1", "H8"),
-    ("H8", "A1"),
-    ("G1", "F3"),
-    ("A7", "A8"),
-    ("E1", "G1"),
-    ("D4", "D5"),
-])
+@pytest.mark.parametrize(
+    "from_sq, to_sq",
+    [
+        ("A1", "H8"),
+        ("H8", "A1"),
+        ("G1", "F3"),
+        ("A7", "A8"),
+        ("E1", "G1"),
+        ("D4", "D5"),
+    ],
+)
 def test_validate_success_various_moves(from_sq, to_sq):
     cmd = MoveCommand(from_sq, to_sq)
     result = validate(cmd)
@@ -90,6 +102,7 @@ def test_validate_success_various_moves(from_sq, to_sq):
 # ---------------------------------------------------------------------------
 # validate() — failure paths
 # ---------------------------------------------------------------------------
+
 
 def test_validate_no_command():
     result = validate(None)
@@ -137,11 +150,8 @@ def test_validate_lowercase_squares_normalised():
 # All 64 valid squares round-trip
 # ---------------------------------------------------------------------------
 
-ALL_SQUARES = [
-    f"{col}{row}"
-    for col in "ABCDEFGH"
-    for row in "12345678"
-]
+ALL_SQUARES = [f"{col}{row}" for col in "ABCDEFGH" for row in "12345678"]
+
 
 @pytest.mark.parametrize("sq", ALL_SQUARES)
 def test_all_64_squares_valid(sq):
@@ -152,6 +162,7 @@ def test_all_64_squares_valid(sq):
 # ---------------------------------------------------------------------------
 # Action Commands validation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("action", ["NEW_GAME", "RESUME_GAME", "RESIGN_GAME"])
 def test_validate_action_commands(action):

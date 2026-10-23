@@ -1,6 +1,12 @@
 *.wav
-voice/.venv/
+.venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
 voice/models/vosk-model-*/
+voice/models/*.onnx
+voice.local.toml
