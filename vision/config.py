@@ -29,6 +29,9 @@ CALIBRATION_FILE: str = str(VISION_DIR / "camera_calibration.json")
 # Diagnostic images directory (inside vision/)
 DIAGNOSTIC_DIR: str = str(VISION_DIR / "diags")
 
+# Reference images of each piece (<Type>_<Color>.png) used for type matching
+PIECES_DIR: str = str(OFICINAS_DIR / "pieces")
+
 # ---------------------------------------------------------------------------
 # Camera capture
 # ---------------------------------------------------------------------------
@@ -84,6 +87,25 @@ PIECE_BRIGHTNESS_THRESHOLD: int = 160
 # Minimum saturation for a pixel to be considered "coloured" (not neutral).
 # Helps ignore board texture when classifying piece colour.
 PIECE_SATURATION_MIN: int = 30
+
+# ---------------------------------------------------------------------------
+# Piece type classification (template matching against pieces/*.png)
+# ---------------------------------------------------------------------------
+
+# Enable/disable piece type classification
+PIECE_TYPE_ENABLED: bool = True
+
+# Template sizes tried, as a fraction of the square's shorter side
+PIECE_TEMPLATE_SCALES: tuple[float, ...] = (0.45, 0.55, 0.65, 0.75, 0.85)
+
+# Rotations (degrees) tried; 180 covers pieces facing the opposite player
+PIECE_TEMPLATE_ROTATIONS: tuple[int, ...] = (0, 180)
+
+# Minimum normalised correlation of the best match to accept a type
+PIECE_TYPE_MIN_SCORE: float = 0.20
+
+# Minimum gap between best and second-best match to accept a type
+PIECE_TYPE_MIN_MARGIN: float = 0.03
 
 # ---------------------------------------------------------------------------
 # Quality / confidence

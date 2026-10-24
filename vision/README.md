@@ -12,7 +12,7 @@ Sistema de captura e processamento de imagens para o VoiceChess. Identifica o es
 vision/
 ├── config.py              # Todas as constantes configuráveis
 ├── requirements.txt       # Dependências Python (opencv + numpy)
-├── smoke_test.py          # Testa todos os módulos SEM câmera física
+├── scripts/live_test.py   # Teste ao vivo com a câmera (overlay das casas)
 │
 ├── __init__.py            # CameraSystem — fachada pública do módulo
 ├── camera.py              # Controle da câmera USB (captura, warmup, retry)
@@ -85,7 +85,7 @@ Analisa o recorte de cada casa para determinar:
 
 1. **Ocupada ou vazia** — compara o recorte atual com a imagem de referência (tabuleiro vazio) usando diferença absoluta média (MAD). Sem referência, usa variância de pixels.
 2. **Cor da peça** — analisa o canal V (brilho) do espaço HSV. Peças brancas têm brilho alto; pretas têm brilho baixo.
-3. **Tipo da peça** — *não implementado ainda* (Opção B futura, requer modelo CNN).
+3. **Tipo da peça** — classificado por `PieceClassifier` (`piece_classifier.py`), via *template matching* multi-escala (mapas de borda, rotações 0°/180°) contra as imagens de referência em `pieces/<Tipo>_<Cor>.png`. Não requer treinamento. Retorna `None` se a correspondência for ambígua. Ajuste em `config.py` (`PIECE_TYPE_*`, `PIECE_TEMPLATE_*`).
 
 ---
 
@@ -352,4 +352,4 @@ A classificação do tipo da peça (peão, torre, cavalo...) está reservada par
 3. Carregar o modelo **uma única vez** no `PieceDetector.__init__()`
 4. Chamar a inferência apenas para casas detectadas como ocupadas
 
-O campo `piece` em `SquareState` já está reservado para isso e sempre retorna `None` até que o modelo seja integrado.
+O campo `piece` em `SquareState` agora é preenchido pelo classificador por template matching; um CNN continua sendo uma evolução possível caso a precisão com peças reais seja insuficiente.

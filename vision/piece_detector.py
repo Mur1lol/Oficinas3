@@ -38,6 +38,7 @@ import cv2
 import numpy as np
 
 from . import config as cfg
+from .piece_classifier import PieceClassifier
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +128,12 @@ class PieceDetector:
         # Extract reference square ROIs once (avoid re-slicing on every call)
         self._ref_squares: dict[str, np.ndarray] = {}
 
+        # Piece type classifier (template matching on pieces/*.png)
+        self._classifier: PieceClassifier | None = None
+        if cfg.PIECE_TYPE_ENABLED:
+            clf = PieceClassifier()
+            self._classifier = clf if clf.is_ready else None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -174,11 +181,16 @@ class PieceDetector:
         # ── Combined confidence ───────────────────────────────────────
         confidence = occ_confidence * color_confidence if occupied else occ_confidence
 
+        # ── Piece type (template matching) ────────────────────────────
+        piece: Optional[str] = None
+        if occupied and self._classifier is not None:
+            piece, _ = self._classifier.classify(roi, color)
+
         return SquareAnalysis(
             square=square,
             occupied=occupied,
             color=color,
-            piece=None,    # Opção B — future
+            piece=piece,
             confidence=confidence,
             mad=mad,
             variance=variance,

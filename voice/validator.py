@@ -1,5 +1,5 @@
 from .config import WAKE_WORD
-from .parser import ACTIONS, ActionCommand, Command, MoveCommand
+from .parser import ACTIONS, ActionCommand, Command, LevelCommand, MoveCommand
 
 
 def is_valid_square(square: str) -> tuple[bool, str]:
@@ -20,6 +20,10 @@ def validate(command: Command | None, reason: str | None = None) -> dict:
     result = {"wake_word": WAKE_WORD, "valid": True}
     if isinstance(command, ActionCommand) and command.action in ACTIONS:
         return {**result, "command": command.action}
+    if isinstance(command, LevelCommand):
+        if not 1 <= command.level <= 8:
+            return {"valid": False, "reason": "Difficulty level must be between 1 and 8."}
+        return {**result, "command": "SET_DIFFICULTY", "level": command.level}
     if isinstance(command, MoveCommand):
         source, destination = command.from_square.strip().upper(), command.to_square.strip().upper()
         for label, square in (("source", source), ("destination", destination)):
