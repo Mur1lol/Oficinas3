@@ -198,6 +198,42 @@ def diagnostico_completo(esp: ESP32Communication):
     print("-" * 50)
 
 
+def teste_drivers_torque(esp: ESP32Communication):
+    """Testa a habilitação dos drivers de passo (EN_MOT) e torque de retenção."""
+    print("\n[*] Teste de Habilitacao dos Motores (Torque de Retencao)...")
+    print(" -> Enviando 'on' para travar motores...")
+    esp.ser.write(b"on\n")
+    time.sleep(0.3)
+    resp = esp.ser.readline().decode("utf-8", errors="ignore").strip()
+    print(f" -> Resposta do ESP32: {resp}")
+    print(" -> Teste com a mao: os motores devem estar travados e resistindo ao movimento.")
+    input(" -> Pressione [ENTER] quando estiver pronto para destravar os motores...")
+    esp.ser.write(b"off\n")
+    time.sleep(0.3)
+    resp = esp.ser.readline().decode("utf-8", errors="ignore").strip()
+    print(f" -> Resposta do ESP32: {resp}")
+    print(" -> [OK] Drivers desligados. Os motores estao livres novamente!")
+    return True
+
+
+def teste_pequeno_movimento(esp: ESP32Communication):
+    """Testa um deslocamento seguro de 20mm para verificar a cinemática CoreXY."""
+    print("\n[*] ATENCAO: Posicione o carro aproximadamente no CENTRO da mesa!")
+    conf = input("O gantry possui curso livre para se mover 20mm? (s/N): ").strip().lower()
+    if conf not in ("s", "sim", "y", "yes"):
+        print(" -> Movimento cancelado.")
+        return False
+
+    print("[*] Enviando comando gantry: deslocamento de 20mm...")
+    try:
+        esp.gantry(x=[20.0], y=[20.0], eletroima=[0], timeout=15.0)
+        print(" -> [OK] Movimento executado e confirmado pelo ESP32!")
+        return True
+    except Exception as exc:
+        print(f" -> [FALHA] Falha no movimento: {exc}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Utilitário de Teste de Comunicação Raspberry Pi <-> ESP32"
@@ -245,12 +281,14 @@ def main():
             print("1 - Teste de Status (Ping / JSON)")
             print("2 - Teste do Eletroíma (Liga 2s e Desliga)")
             print("3 - Teste dos Fins de Curso (Monitoramento continuo)")
-            print("4 - Teste de Homing (Zero de maquina)")
-            print("5 - Console Serial Interativo (Comandos manuais)")
-            print("6 - Executar Diagnostico Completo")
+            print("4 - Teste dos Drivers de Passo (Trava / Destrava motores)")
+            print("5 - Teste de Movimento Curto Seguro (20mm)")
+            print("6 - Teste de Homing (Zero de maquina)")
+            print("7 - Console Serial Interativo (Comandos manuais)")
+            print("8 - Executar Diagnostico Completo")
             print("0 - Sair")
 
-            opcao = input("\nEscolha uma opcao [0-6]: ").strip()
+            opcao = input("\nEscolha uma opcao [0-8]: ").strip()
             if opcao == "1":
                 teste_status(esp)
             elif opcao == "2":
@@ -258,10 +296,14 @@ def main():
             elif opcao == "3":
                 teste_fins_de_curso(esp)
             elif opcao == "4":
-                teste_homing(esp)
+                teste_drivers_torque(esp)
             elif opcao == "5":
-                console_interativo(esp)
+                teste_pequeno_movimento(esp)
             elif opcao == "6":
+                teste_homing(esp)
+            elif opcao == "7":
+                console_interativo(esp)
+            elif opcao == "8":
                 diagnostico_completo(esp)
             elif opcao in ("0", "sair", "exit", "q"):
                 print("Encerrando...")
