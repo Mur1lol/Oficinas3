@@ -143,6 +143,14 @@ class Comunication {
       delete[] posY;
       delete[] posIma;
 
+      // Desliga o eletroima por seguranca
+      gantry.eletroima().desligar();
+
+      // Antes de responder que o movimento foi finalizado, retorna o gantry para o Homing (0,0)
+      if (res == MOV_OK) {
+        res = gantry.irPara(0.0f, 0.0f);
+      }
+
       if (res == MOV_OK) {
         responderOk();
       } else if (res == MOV_BATEU_FIM_CURSO) {

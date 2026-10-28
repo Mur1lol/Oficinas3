@@ -10,12 +10,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # ── Tabuleiro / Gantry ───────────────────────────────────────────────────────
-SQUARE_MM = 50.0          # cada casa tem 5 cm; 16 colunas x 8 linhas = 800 x 400 mm
+SQUARE_MM = 50.0          # cada casa tem 5 cm (50 mm) por conta dos vaos
 # Origem do Gantry (X=0, Y=0) = canto da FRENTE, a esquerda (lado das brancas / rank 1).
 # True  -> a fileira 1 (brancas) fica perto de Y=0.
 # False -> a fileira 8 fica perto de Y=0 (inverte o eixo Y).
 INVERT_Y = True
-HOME_CELL = (7, 0)        # celula logica (linha, coluna) mais proxima do home do Gantry
 GANTRY_TIMEOUT_S = 180.0  # tempo maximo esperando o ESP32 terminar uma jogada
 
 # ── LEDs (um LED RGB de cada lado do tabuleiro) ──────────────────────────────
