@@ -50,8 +50,9 @@ class ESP32Communication:
         """Procura automaticamente a porta do ESP32 (ou a primeira disponível)."""
         ports = serial.tools.list_ports.comports()
         for port in ports:
-            # Procura por dispositivos USB que podem ser ESP32
-            if any(k in port.description for k in ('USB', 'CH340', 'CP210', 'ESP32')):
+            # Procura por dispositivos USB que podem ser ESP32 (Windows e Linux/Raspberry)
+            info = f"{port.device} {port.description} {port.hwid}".lower()
+            if any(k in info for k in ('ch340', 'cp210', 'esp32', 'uart', 'ttyusb', 'ttyacm', 'usb')):
                 if verbose:
                     print(f"Porta ESP32 encontrada: {port.device} - {port.description}")
                 return port.device
