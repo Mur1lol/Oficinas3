@@ -163,54 +163,35 @@ def find_path(
     }
 
 
-def find_path_logical(
+def find_path_physical(
     board_logic,
-    origin_logical: tuple,
-    dest_logical: tuple,
+    start_phys: tuple[int, int],
+    goal_phys: tuple[int, int],
 ) -> dict | None:
-    """
-    Calcula o caminho no grid fisico 17x33 entre duas coordenadas logicas globais.
+    """Calcula o caminho no grid fisico 17x33 entre quaisquer duas coordenadas fisicas (pr, pc)."""
+    from board import BoardPhysical, PHYS_ROWS, PHYS_COLS
 
-    Aceita qualquer coordenada logica (row 0..7, col 0..15), incluindo
-    cemiterio (cols 0..2 e 13..15) e vaos (cols 3 e 12).
+    sr, sc = start_phys
+    gr, gc = goal_phys
 
-    Parameters
-    ----------
-    board_logic : BoardLogic (ou Board8x8)
-        Estado atual do grid logico completo.
-    origin_logical : (row, col)  -- espaco logico global (0..7, 0..15)
-    dest_logical   : (row, col)  -- espaco logico global (0..7, 0..15)
+    if not (0 <= sr < PHYS_ROWS and 0 <= sc < PHYS_COLS):
+        raise ValueError(f"Origem fisica ({sr},{sc}) fora do grid.")
+    if not (0 <= gr < PHYS_ROWS and 0 <= gc < PHYS_COLS):
+        raise ValueError(f"Destino fisico ({gr},{gc}) fora do grid.")
 
-    Returns
-    -------
-    dict com ``moves_x``, ``moves_y`` e ``path``, ou None se sem caminho.
-    """
-    from board import BoardPhysical, LOGIC_ROWS, LOGIC_COLS
+    if start_phys == goal_phys:
+        return {"moves_x": [], "moves_y": [], "path": [start_phys]}
 
-    or_r, or_c = origin_logical
-    ds_r, ds_c = dest_logical
-
-    if not (0 <= or_r < LOGIC_ROWS and 0 <= or_c < LOGIC_COLS):
-        raise ValueError(f"Origem logica ({or_r},{or_c}) fora do grid.")
-    if not (0 <= ds_r < LOGIC_ROWS and 0 <= ds_c < LOGIC_COLS):
-        raise ValueError(f"Destino logico ({ds_r},{ds_c}) fora do grid.")
-
-    if origin_logical == dest_logical:
-        pr, pc = or_r * 2 + 1, or_c * 2 + 1
-        return {"moves_x": [], "moves_y": [], "path": [(pr, pc)]}
-
-    # Constroi o grid fisico a partir do estado logico
     phys = BoardPhysical(board_logic)
-
-    start = (or_r * 2 + 1, or_c * 2 + 1)
-    goal  = (ds_r * 2 + 1, ds_c * 2 + 1)
+    start = start_phys
+    goal = goal_phys
 
     def h(a):
         return abs(a[0] - goal[0]) + abs(a[1] - goal[1])
 
-    heap      = [(h(start), 0, start)]
+    heap = [(h(start), 0, start)]
     came_from = {start: None}
-    g_cost    = {start: 0}
+    g_cost = {start: 0}
 
     while heap:
         f, g, cur = heapq.heappop(heap)
@@ -222,10 +203,12 @@ def find_path_logical(
         for dr, dc in _DIRS:
             nxt = (cr + dr, cc + dc)
             nr, nc = nxt
+            if not (0 <= nr < PHYS_ROWS and 0 <= nc < PHYS_COLS):
+                continue
             if nxt == goal:
                 new_g = g + 1
                 if new_g < g_cost.get(nxt, float("inf")):
-                    g_cost[nxt]    = new_g
+                    g_cost[nxt] = new_g
                     came_from[nxt] = cur
                     heapq.heappush(heap, (new_g, new_g, nxt))
                 continue
@@ -233,7 +216,7 @@ def find_path_logical(
                 continue
             new_g = g + 1
             if new_g < g_cost.get(nxt, float("inf")):
-                g_cost[nxt]    = new_g
+                g_cost[nxt] = new_g
                 came_from[nxt] = cur
                 heapq.heappush(heap, (new_g + h(nxt), new_g, nxt))
 
@@ -255,6 +238,27 @@ def find_path_logical(
         moves_y.append(cr - pr)
 
     return {"moves_x": moves_x, "moves_y": moves_y, "path": path}
+
+
+def find_path_logical(
+    board_logic,
+    origin_logical: tuple,
+    dest_logical: tuple,
+) -> dict | None:
+    """Calcula o caminho no grid fisico 17x33 entre duas coordenadas logicas globais."""
+    from board import LOGIC_ROWS, LOGIC_COLS
+
+    or_r, or_c = origin_logical
+    ds_r, ds_c = dest_logical
+
+    if not (0 <= or_r < LOGIC_ROWS and 0 <= or_c < LOGIC_COLS):
+        raise ValueError(f"Origem logica ({or_r},{or_c}) fora do grid.")
+    if not (0 <= ds_r < LOGIC_ROWS and 0 <= ds_c < LOGIC_COLS):
+        raise ValueError(f"Destino logico ({ds_r},{ds_c}) fora do grid.")
+
+    start = (or_r * 2 + 1, or_c * 2 + 1)
+    goal = (ds_r * 2 + 1, ds_c * 2 + 1)
+    return find_path_physical(board_logic, start, goal)
 
 
 def print_result(result: dict | None, board17: Board17x17 | None = None) -> None:

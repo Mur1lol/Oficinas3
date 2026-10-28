@@ -35,7 +35,7 @@ sys.path.insert(0, str(cfg.ROOT / "navigation"))
 from board import (BoardLogic, PIECE, EMPTY, LOGIC_ROWS, PHYS_ROWS,          # noqa: E402
                    COL_BOARD_START, COL_CEM_ESQ_START, COL_CEM_ESQ_END,
                    COL_CEM_DIR_START, COL_CEM_DIR_END)
-from pathfinder import find_path_logical                                     # noqa: E402
+from pathfinder import find_path_logical, find_path_physical                     # noqa: E402
 
 # ── Layout fixo do cemiterio (mesmo de main.py) ──────────────────────────────
 W_PAWN_COL = COL_CEM_ESQ_START
@@ -78,10 +78,15 @@ class MovePlanner:
     def __init__(self) -> None:
         self.reset()
 
+    @staticmethod
+    def home_phys() -> tuple[int, int]:
+        """Coordenada fisica (pr, pc) correspondente a (0.0, 0.0) mm."""
+        return (PHYS_ROWS - 1, 0) if cfg.INVERT_Y else (0, 0)
+
     def reset(self) -> None:
         self.board = chess.Board()
         self.cem_occ: dict[tuple[int, int], int] = {}
-        self.robot_pos = cfg.HOME_CELL
+        self.robot_phys = self.home_phys()
         self.carrying = False
         self.logic = BoardLogic()
         self._steps: list[tuple[float, float, int]] = []
@@ -103,7 +108,7 @@ class MovePlanner:
         """Desfaz o ultimo plan() (use quando o ESP32 nao concluir o movimento)."""
         if self._snapshot is None:
             return
-        self.board, self.cem_occ, self.robot_pos, self.carrying = self._snapshot
+        self.board, self.cem_occ, self.robot_phys, self.carrying = self._snapshot
         self._snapshot = None
         self._rebuild()
 
@@ -163,12 +168,12 @@ class MovePlanner:
         if not self._steps or self._steps[-1] != step:
             self._steps.append(step)
 
-    def _navigate(self, dest: tuple[int, int]) -> None:
-        if self.robot_pos == dest:
+    def _navigate_phys(self, dest_phys: tuple[int, int]) -> None:
+        if self.robot_phys == dest_phys:
             return
-        result = find_path_logical(self.logic, self.robot_pos, dest)
+        result = find_path_physical(self.logic, self.robot_phys, dest_phys)
         if not result:
-            raise PlanningError(f"Sem caminho: {self.robot_pos} -> {dest}")
+            raise PlanningError(f"Sem caminho fisico: {self.robot_phys} -> {dest_phys}")
         pts = [self.phys_to_mm(*c) for c in result["path"]]
         ima = 1 if self.carrying else 0
         for i in range(1, len(pts)):
@@ -177,27 +182,31 @@ class MovePlanner:
                 if (b[0] - a[0], b[1] - a[1]) == (c[0] - b[0], c[1] - b[1]):
                     continue
             self._emit(pts[i][0], pts[i][1], ima)
-        self.robot_pos = dest
+        self.robot_phys = dest_phys
 
-    def _pickup(self) -> None:
-        r, c = self.robot_pos
+    def _navigate(self, dest: tuple[int, int]) -> None:
+        dest_phys = (dest[0] * 2 + 1, dest[1] * 2 + 1)
+        self._navigate_phys(dest_phys)
+
+    def _pickup(self, cell: tuple[int, int]) -> None:
+        r, c = cell
         self.logic.grid[r][c] = EMPTY
         self.carrying = True
-        x, y = self.cell_mm(self.robot_pos)
+        x, y = self.cell_mm(cell)
         self._emit(x, y, 1)
 
-    def _release(self) -> None:
-        r, c = self.robot_pos
+    def _release(self, cell: tuple[int, int]) -> None:
+        r, c = cell
         self.logic.grid[r][c] = PIECE
         self.carrying = False
-        x, y = self.cell_mm(self.robot_pos)
+        x, y = self.cell_mm(cell)
         self._emit(x, y, 0)
 
     def _carry(self, src: tuple[int, int], dst: tuple[int, int]) -> None:
         self._navigate(src)
-        self._pickup()
+        self._pickup(src)
         self._navigate(dst)
-        self._release()
+        self._release(dst)
 
     # ── planejamento ─────────────────────────────────────────────────────────
 
@@ -208,7 +217,7 @@ class MovePlanner:
         if not self.is_phys_valid(move):
             raise PlanningError("Promocao sem peca capturada disponivel no cemiterio.")
 
-        self._snapshot = (self.board.copy(), dict(self.cem_occ), self.robot_pos, self.carrying)
+        self._snapshot = (self.board.copy(), dict(self.cem_occ), self.robot_phys, self.carrying)
         self._steps = []
         try:
             self._plan(move)
@@ -224,8 +233,9 @@ class MovePlanner:
         fr, to = square_to_cell(move.from_square), square_to_cell(move.to_square)
         to_piece = cb.piece_at(move.to_square)
 
-        x, y = self.cell_mm(self.robot_pos)      # garante o ponto de partida (home)
-        self._emit(x, y, 0)
+        # O robo sempre parte do ponto (0.0, 0.0) mm (Homing)
+        self.robot_phys = self.home_phys()
+        self._emit(0.0, 0.0, 0)
 
         if cb.is_castling(move):
             kingside = chess.square_file(move.to_square) == 6
@@ -269,3 +279,4 @@ class MovePlanner:
         self.board.push(move)
         self.carrying = False
         self._rebuild()
+        self.robot_phys = self.home_phys()
