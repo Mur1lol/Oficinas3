@@ -71,8 +71,12 @@ class Gantry {
 
   // Acesso direto aos periféricos
   Eletroima& eletroima() { return eletroima_; }
+  const Eletroima& eletroima() const { return eletroima_; }
   Motores& motores() { return motores_; }
+  const Motores& motores() const { return motores_; }
+  FimDeCurso& fimX() { return fimX_; }
   const FimDeCurso& fimX() const { return fimX_; }
+  FimDeCurso& fimY() { return fimY_; }
   const FimDeCurso& fimY() const { return fimY_; }
 
   // Chame no loop(): verifica timeouts do eletroímã
