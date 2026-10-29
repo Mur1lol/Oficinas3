@@ -143,6 +143,17 @@ def microfone(_args):
         print("Instale com: sudo apt install portaudio19-dev && pip install pyaudio")
         return
 
+    # Tenta silenciar warnings internos do ALSA no Linux
+    try:
+        from ctypes import CFUNCTYPE, c_char_p, c_int, cdll
+        def py_error_handler(filename, line, function, err, fmt):
+            pass
+        c_error_handler = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)(py_error_handler)
+        asound = cdll.LoadLibrary("libasound.so.2")
+        asound.snd_lib_error_set_handler(c_error_handler)
+    except Exception:
+        pass
+
     pa = pyaudio.PyAudio()
     dev_count = pa.get_device_count()
     print(f"\nDispositivos de audio detectados ({dev_count}):")
@@ -150,7 +161,7 @@ def microfone(_args):
     for i in range(dev_count):
         info = pa.get_device_info_by_index(i)
         if info.get("maxInputChannels", 0) > 0:
-            print(f"  [{i}] {info.get('name')} (Canais: {info.get('maxInputChannels')}, Rate: {int(info.get('defaultSampleRate'))} Hz)")
+            print(f"  [{i}] {info.get('name')} (Canais: {info.get('maxInputChannels')}, Rate Padrao: {int(info.get('defaultSampleRate'))} Hz)")
             input_indices.append(i)
 
     if not input_indices:
@@ -159,17 +170,29 @@ def microfone(_args):
         pa.terminate()
         return
 
-    # Tenta abrir o primeiro microfone disponível ou o padrão
+    # Tenta abrir o microfone na taxa nativa suportada pelo hardware
     idx = input_indices[0]
-    rate = 16000
-    chunk = 1024
+    dev_info = pa.get_device_info_by_index(idx)
+    default_rate = int(dev_info.get("defaultSampleRate", 44100))
+    rates_to_try = [default_rate, 44100, 48000, 16000]
+    # Remove duplicados preservando ordem
+    rates_to_try = list(dict.fromkeys(rates_to_try))
 
-    print(f"\n[*] Abrindo microfone índice [{idx}] a {rate} Hz...")
-    try:
-        stream = pa.open(format=pyaudio.paInt16, channels=1, rate=rate, input=True,
-                         input_device_index=idx, frames_per_buffer=chunk)
-    except Exception as exc:
-        print(f"[FALHA] Nao foi possivel abrir dispositivo [{idx}]: {exc}")
+    stream = None
+    rate = default_rate
+    chunk = 2048
+    for r in rates_to_try:
+        try:
+            stream = pa.open(format=pyaudio.paInt16, channels=1, rate=r, input=True,
+                             input_device_index=idx, frames_per_buffer=chunk)
+            rate = r
+            print(f"\n[*] Microfone aberto com sucesso no dispositivo [{idx}] a {rate} Hz!")
+            break
+        except Exception:
+            continue
+
+    if stream is None:
+        print(f"\n[FALHA] Nao foi possivel abrir o dispositivo [{idx}] com nenhuma das taxas {rates_to_try}.")
         pa.terminate()
         return
 
