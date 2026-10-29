@@ -12,7 +12,7 @@
 //   Fim de curso X: D32 (J4), no lado direito
 //   Fim de curso Y: D33 (J5), na frente
 //
-// Área: X 0..400 mm (viga), Y 0..800 mm (perfis de 900). Home = (400, 0), canto da frente à direita.
+// Área: X 0..350 mm, Y 0..650 mm. Home = (0, 0), canto da frente à direita.
 
 #include <Arduino.h>
 #include "Gantry.h"

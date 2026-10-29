@@ -16,13 +16,11 @@ enum ResultadoMovimento {
 class Gantry {
  public:
   static constexpr float PASSOS_MM   = 80.0f;   // 200 * 16 / (polia 20 dentes * 2 mm)
-  // X anda na viga de 550 mm (curso real ~410 mm), Y nos perfis de 900 mm (~806 mm).
-  // Olhando de frente (motores na frente): +X = direita, +Y = para trás.
-  static constexpr float CURSO_X     = 400.0f;  // Limite útil X em mm
-  static constexpr float CURSO_Y     = 800.0f;  // Limite útil Y em mm
-  // Fins de curso: X no lado DIREITO (+X), Y na FRENTE (-Y). Home = (400, 0).
-  static constexpr bool HOME_X_NO_MAX = true;
-  static constexpr bool HOME_Y_NO_MAX = false;
+  // Curso útil real calibrado:
+  // X = 350 mm máx, Y = 650 mm máx.
+  // Home fica exatamente em (0, 0).
+  static constexpr float CURSO_X     = 350.0f;  // Limite útil X em mm (0..350)
+  static constexpr float CURSO_Y     = 650.0f;  // Limite útil Y em mm (0..650)
   static constexpr float V_INICIAL   = 5.0f;    // mm/s no início/fim da rampa
   static constexpr float MARGEM_HOME = 2.0f;    // Zero fica 2 mm antes dos fins de curso
 
@@ -57,12 +55,15 @@ class Gantry {
   bool estaHabilitado() const { return motores_.estaHabilitado(); }
   bool estaHomed() const { return homed_; }
 
-  float posX() const { return (posA_ + posB_) / (2.0f * PASSOS_MM); }
+  // Coordenadas absolutas a partir do Home (0, 0):
+  // X cresce para dentro da mesa (0 -> 350 mm).
+  // Y cresce para o fundo da mesa (0 -> 650 mm).
+  float posX() const { return -(posA_ + posB_) / (2.0f * PASSOS_MM); }
   float posY() const { return (posA_ - posB_) / (2.0f * PASSOS_MM); }
 
   void definirPosicao(float x, float y) {
-    posA_ = lroundf((x + y) * PASSOS_MM);
-    posB_ = lroundf((x - y) * PASSOS_MM);
+    posA_ = lroundf((-x + y) * PASSOS_MM);
+    posB_ = lroundf((-x - y) * PASSOS_MM);
   }
 
   void zerarSemHoming() {
@@ -97,9 +98,11 @@ class Gantry {
       return MOV_ERRO_DRIVERS_DESLIGADOS;
     }
 
-    // Cinemática CoreXY: da = dx + dy, db = dx - dy
-    long da = lroundf((dx + dy) * PASSOS_MM);
-    long db = lroundf((dx - dy) * PASSOS_MM);
+    // Cinemática CoreXY:
+    // +X do usuário afasta da chave para dentro da mesa (0 -> 350 mm), logo dx_fisico = -dx.
+    float dx_fisico = -dx;
+    long da = lroundf((dx_fisico + dy) * PASSOS_MM);
+    long db = lroundf((dx_fisico - dy) * PASSOS_MM);
     long na = labs(da);
     long nb = labs(db);
     long n  = max(na, nb);
@@ -128,9 +131,9 @@ class Gantry {
 
       bool fx = fimX_.acionado();
       bool fy = fimY_.acionado();
-      // Fora do homing, só para se o carro estiver indo NA DIREÇÃO da chave acionada
+      // Fora do homing, só para se o carro estiver indo NA DIREÇÃO da chave (dx < 0 ou dy < 0)
       bool bate = (procurar == 'X') ? fx : (procurar == 'Y') ? fy
-                : ((fx && dx * sentidoX() > 0) || (fy && dy * sentidoY() > 0));
+                : ((fx && dx < 0) || (fy && dy < 0));
       contaFim = bate ? (contaFim + 1) : 0;
       if (contaFim >= 3) {
         r = MOV_BATEU_FIM_CURSO;
@@ -166,7 +169,7 @@ class Gantry {
     return mover(x - posX(), y - posY());
   }
 
-  // Rotina completa de Homing
+  // Rotina completa de Homing: define o zero absoluto (0, 0)
   bool homing() {
     if (!motores_.estaHabilitado()) {
       motores_.habilitar(true);
@@ -178,12 +181,14 @@ class Gantry {
       return false;
     }
 
-    // O ponto onde as chaves acionaram fica 2 mm além do home
-    definirPosicao(homeX() + sentidoX() * MARGEM_HOME, homeY() + sentidoY() * MARGEM_HOME);
-    if (mover(-sentidoX() * MARGEM_HOME, -sentidoY() * MARGEM_HOME, 0, 15, false) != MOV_OK) {
+    // O ponto onde os sensores acionaram fica a -MARGEM_HOME
+    definirPosicao(-MARGEM_HOME, -MARGEM_HOME);
+    // Recua MARGEM_HOME (2 mm) para dentro da mesa (+X e +Y), parando exatamente em (0, 0)
+    if (mover(MARGEM_HOME, MARGEM_HOME, 0, 15, false) != MOV_OK) {
       return false;
     }
 
+    definirPosicao(0.0f, 0.0f);
     homed_ = true;
     return true;
   }
@@ -216,30 +221,24 @@ class Gantry {
   }
 
  private:
-  static float sentidoX() { return HOME_X_NO_MAX ? 1.0f : -1.0f; }  // lado em que fica a chave
-  static float sentidoY() { return HOME_Y_NO_MAX ? 1.0f : -1.0f; }
-  static float homeX() { return HOME_X_NO_MAX ? CURSO_X : 0.0f; }
-  static float homeY() { return HOME_Y_NO_MAX ? CURSO_Y : 0.0f; }
-
   bool procurarFim(char eixo, float& achou) {
     const FimDeCurso& f = (eixo == 'X') ? fimX_ : fimY_;
-    // u = sentido de AFASTAR da chave (a busca anda em -u)
-    float ux = (eixo == 'X') ? -sentidoX() : 0.0f;
-    float uy = (eixo == 'Y') ? -sentidoY() : 0.0f;
+    float ux = (eixo == 'X') ? 1.0f : 0.0f;
+    float uy = (eixo == 'Y') ? 1.0f : 0.0f;
     float maxMm = (eixo == 'X') ? (CURSO_X + 50.0f) : (CURSO_Y + 50.0f);
 
-    // Se já estiver acionado, dá um pequeno passo à frente para desencostar
+    // Se já estiver acionado, dá um pequeno passo para a frente (+5 mm) para desencostar
     if (f.acionado()) mover(5.0f * ux, 5.0f * uy, 0, 10, false);
     if (f.acionado()) return false;
 
-    // Busca rápida (15 mm/s) até acionar
+    // Busca rápida (15 mm/s) no sentido da chave (-X ou -Y)
     ResultadoMovimento r = mover(-maxMm * ux, -maxMm * uy, eixo, 15, false);
     if (r != MOV_BATEU_FIM_CURSO) return false;
 
-    // Recua 3 mm
+    // Recua 3 mm para dentro da mesa (+3 mm)
     mover(3.0f * ux, 3.0f * uy, 0, 5, false);
 
-    // Busca lenta de precisão (3 mm/s)
+    // Busca lenta de precisão (3 mm/s) no sentido da chave (-6 mm)
     if (mover(-6.0f * ux, -6.0f * uy, eixo, 3, false) != MOV_BATEU_FIM_CURSO) {
       return false;
     }

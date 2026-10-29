@@ -2,16 +2,18 @@
 """
 test_communication.py
 =====================
-Script de testes para validação da comunicação Serial/USB entre Raspberry Pi e ESP32.
+Script interativo para teste dos motores e eletroímã (ESP32 <-> Raspberry Pi).
 
-Pode ser executado diretamente na Raspberry Pi ou no PC de desenvolvimento:
-    python test_communication.py
-    python test_communication.py --port /dev/ttyUSB0
-    python test_communication.py --auto
+Opções do menu:
+    1 - Mover no eixo X (distância em mm)
+    2 - Mover no eixo Y (distância em mm)
+    3 - Ligar Eletroímã
+    4 - Desligar Eletroímã
+    5 - Homing (Zero de máquina)
+    0 - Sair
 """
 
 import argparse
-import json
 import sys
 import time
 
@@ -25,6 +27,10 @@ except ImportError:
 
 from comunication import ESP32Communication
 
+# Limites do gantry
+MAX_X_MM = 350.0
+MAX_Y_MM = 650.0
+
 
 def listar_portas():
     """Lista todas as portas seriais disponíveis no sistema."""
@@ -32,290 +38,147 @@ def listar_portas():
     print("\n--- Portas Seriais Detectadas ---")
     if not ports:
         print("  Nenhuma porta serial encontrada.")
-        print("  Dica na Raspberry Pi:")
-        print("    1. Verifique se o cabo USB está conectado.")
-        print("    2. Verifique se o cabo possui linhas de dados (nao apenas carga).")
-        print("    3. Execute 'lsusb' e 'dmesg | grep tty' no terminal para debugar.")
         return []
 
     for idx, p in enumerate(ports, start=1):
-        print(f"  [{idx}] {p.device}")
-        print(f"      Descricao: {p.description}")
-        print(f"      HWID:      {p.hwid}")
+        print(f"  [{idx}] {p.device} ({p.description})")
     return ports
 
 
-def teste_status(esp: ESP32Communication):
-    """Envia comando de status e valida os campos retornados."""
-    print("\n[*] Solicitando status do ESP32...")
+def mover_x(esp: ESP32Communication):
+    """Move uma distância relativa no eixo X."""
+    print(f"\n[*] Mover no Eixo X (Limite: 0 a {MAX_X_MM:.0f} mm)")
+    dist_str = input("Distancia em mm para mover em X (ex: 50 ou -50) [padrao: 50]: ").strip()
     try:
-        status = esp.obter_status(timeout=5.0)
-        print(" -> Resposta recebida:")
-        print(json.dumps(status, indent=2, ensure_ascii=False))
-
-        # Validacoes basicas
-        if status.get("comando") == "status":
-            print(" -> [OK] ESP32 respondeu corretamente ao comando de status!")
-            print(f"    Posicao X: {status.get('x')} mm | Y: {status.get('y')} mm")
-            print(f"    Homed: {status.get('homed')} | Drivers: {status.get('drivers')}")
-            print(f"    Eletroima: {status.get('eletroima')}")
-            print(f"    Fim de curso X: {status.get('fim_x')} | Y: {status.get('fim_y')}")
-            return True
-        else:
-            print(" -> [AVISO] Resposta inesperada:", status)
-            return False
-    except Exception as exc:
-        print(f" -> [FALHA] Erro ao obter status: {exc}")
-        return False
-
-
-def teste_eletroima(esp: ESP32Communication):
-    """Testa ligar e desligar o eletroímã com intervalo de 2 segundos."""
-    print("\n[*] Testando acionamento do eletroima...")
-    try:
-        print(" -> Ligando eletroima (esperando 'ok')...")
-        esp.acionar_eletroima(ligar=True, timeout=5.0)
-        print(" -> [OK] Eletroima LIGADO com sucesso!")
-        print("    Aguardando 2 segundos com ima acionado...")
-        time.sleep(2)
-
-        print(" -> Desligando eletroima...")
-        esp.acionar_eletroima(ligar=False, timeout=5.0)
-        print(" -> [OK] Eletroima DESLIGADO com sucesso!")
-        return True
-    except Exception as exc:
-        print(f" -> [FALHA] Erro no teste do eletroima: {exc}")
-        return False
-
-
-def teste_fins_de_curso(esp: ESP32Communication):
-    """Monitora os fins de curso em tempo real por leitura contínua."""
-    print("\n[*] Monitoramento em tempo real dos fins de curso (Ctrl+C para sair):")
-    print("    Pressione manualmente os switches de fim de curso X e Y para testar.")
-    try:
-        while True:
-            st = esp.obter_status(timeout=2.0)
-            fim_x = "ACIONADO [X]" if st.get("fim_x") else "aberto"
-            fim_y = "ACIONADO [Y]" if st.get("fim_y") else "aberto"
-            sys.stdout.write(f"\r    Fim de Curso X: {fim_x:<15} | Fim de Curso Y: {fim_y:<15}")
-            sys.stdout.flush()
-            time.sleep(0.3)
-    except KeyboardInterrupt:
-        print("\n\n -> Monitoramento finalizado.")
-
-
-def teste_homing(esp: ESP32Communication):
-    """Executa o ciclo de homing do robô."""
-    print("\n[!] ATENCAO: Certifique-se de que a mesa esta desobstruida e os fins de curso instalados.")
-    conf = input("Deseja executar o Homing agora? (s/N): ").strip().lower()
-    if conf not in ("s", "sim", "y", "yes"):
-        print(" -> Homing cancelado pelo usuario.")
-        return False
-
-    print("[*] Iniciando ciclo de Homing (tempo maximo: 30s)...")
-    try:
-        resp = esp.homing(timeout=30.0)
-        print(" -> [OK] Homing concluido com sucesso!")
-        print(f"    Resposta: {resp}")
-        return True
-    except Exception as exc:
-        print(f" -> [FALHA] Falha no Homing: {exc}")
-        return False
-
-
-def console_interativo(esp: ESP32Communication):
-    """Console interativo para enviar comandos manuais ao ESP32."""
-    print("\n=== Console Interativo Serial ===")
-    print("Digite comandos para enviar ao ESP32. Exemplos:")
-    print("  status         -> requisita status em JSON")
-    print("  on             -> habilita drivers dos motores")
-    print("  off            -> desabilita drivers dos motores")
-    print("  m on           -> liga eletroima")
-    print("  m off          -> desliga eletroima")
-    print("  homing (ou h)  -> executa homing")
-    print("  ou envie JSON  -> {\"comando\":\"status\"}")
-    print("  sair           -> encerra o console interativo\n")
-
-    while True:
-        try:
-            cmd = input("ESP32 >> ").strip()
-            if not cmd:
-                continue
-            if cmd.lower() in ("sair", "exit", "quit", "q"):
-                break
-
-            # Se for formato JSON
-            if cmd.startswith("{"):
-                try:
-                    payload = json.loads(cmd)
-                    esp.enviar_comando(payload.get("comando"), payload.get("resposta"))
-                except json.JSONDecodeError:
-                    print("JSON invalido.")
-                    continue
-            elif cmd.lower() == "status":
-                esp.enviar_comando("status")
-            elif cmd.lower() in ("on", "off", "m on", "m off", "h", "homing"):
-                esp.ser.write((cmd + "\n").encode())
-            else:
-                esp.ser.write((cmd + "\n").encode())
-
-            # Aguarda e lê respostas que chegarem
-            time.sleep(0.15)
-            while esp.ser.in_waiting:
-                linha = esp.ser.readline().decode("utf-8", errors="ignore").strip()
-                if linha:
-                    print(f"  << {linha}")
-        except KeyboardInterrupt:
-            print("\n")
-            break
-        except Exception as exc:
-            print(f"Erro: {exc}")
-
-
-def diagnostico_completo(esp: ESP32Communication):
-    """Executa sequência automatizada de diagnóstico."""
-    print("\n" + "=" * 50)
-    print("       DIAGNOSTICO COMPLETO ESP32 <-> RASPBERRY")
-    print("=" * 50)
-
-    sucessos = 0
-    total = 2
-
-    # 1. Status
-    if teste_status(esp):
-        sucessos += 1
-
-    # 2. Eletroímã
-    if teste_eletroima(esp):
-        sucessos += 1
-
-    print("\n" + "-" * 50)
-    print(f"Resultado: {sucessos}/{total} testes concluidos com sucesso.")
-    if sucessos == total:
-        print("[SUCESSO] Comunicacao entre Raspberry e ESP32 100% OPERACIONAL!")
-    else:
-        print("[AVISO] Alguns testes apresentaram falha. Verifique os logs acima.")
-    print("-" * 50)
-
-
-def teste_drivers_torque(esp: ESP32Communication):
-    """Testa a habilitação dos drivers de passo (EN_MOT) e torque de retenção."""
-    print("\n[*] Teste de Habilitacao dos Motores (Torque de Retencao)...")
-    print(" -> Enviando 'on' para travar motores...")
-    esp.ser.write(b"on\n")
-    time.sleep(0.3)
-    resp = esp.ser.readline().decode("utf-8", errors="ignore").strip()
-    print(f" -> Resposta do ESP32: {resp}")
-    print(" -> Teste com a mao: os motores devem estar travados e resistindo ao movimento.")
-    input(" -> Pressione [ENTER] quando estiver pronto para destravar os motores...")
-    esp.ser.write(b"off\n")
-    time.sleep(0.3)
-    resp = esp.ser.readline().decode("utf-8", errors="ignore").strip()
-    print(f" -> Resposta do ESP32: {resp}")
-    print(" -> [OK] Drivers desligados. Os motores estao livres novamente!")
-    return True
-
-
-def teste_movimento_eixo(esp: ESP32Communication):
-    """Envia comando para o ESP32 mover o gantry no eixo X ou Y pela distância em mm."""
-    print("\n[*] Teste de Movimentacao de Eixo (X ou Y em mm)")
-    eixo = input("Qual eixo deseja mover? (X / Y) [padrao: X]: ").strip().upper()
-    if eixo not in ("X", "Y"):
-        eixo = "X"
-
-    dist_str = input(f"Distancia em mm para o eixo {eixo} (ex: 20 ou -20) [padrao: 10]: ").strip()
-    try:
-        dist_mm = float(dist_str) if dist_str else 10.0
+        dist_mm = float(dist_str) if dist_str else 50.0
     except ValueError:
         print("Valor invalido.")
-        return False
+        return
 
-    print(f"[*] Enviando comando para mover eixo {eixo} em {dist_mm} mm...")
+    print(f"[*] Movendo X em {dist_mm:+.1f} mm...")
     try:
-        esp.mover_eixo(eixo, dist_mm, timeout=20.0)
-        print(f" -> [OK] Eixo {eixo} moveu {dist_mm} mm com sucesso!")
-        return True
+        esp.mover_eixo("X", dist_mm, timeout=30.0)
+        time.sleep(0.2)
+        st = esp.obter_status(timeout=2.0)
+        print(f" -> [OK] Posicao atual: X={st.get('x', '?')} mm | Y={st.get('y', '?')} mm")
     except Exception as exc:
-        print(f" -> [FALHA] Falha no movimento: {exc}")
-        return False
+        print(f" -> [ERRO] {exc}")
+
+
+def mover_y(esp: ESP32Communication):
+    """Move uma distância relativa no eixo Y."""
+    print(f"\n[*] Mover no Eixo Y (Limite: 0 a {MAX_Y_MM:.0f} mm)")
+    dist_str = input("Distancia em mm para mover em Y (ex: 50 ou -50) [padrao: 50]: ").strip()
+    try:
+        dist_mm = float(dist_str) if dist_str else 50.0
+    except ValueError:
+        print("Valor invalido.")
+        return
+
+    print(f"[*] Movendo Y em {dist_mm:+.1f} mm...")
+    try:
+        esp.mover_eixo("Y", dist_mm, timeout=30.0)
+        time.sleep(0.2)
+        st = esp.obter_status(timeout=2.0)
+        print(f" -> [OK] Posicao atual: X={st.get('x', '?')} mm | Y={st.get('y', '?')} mm")
+    except Exception as exc:
+        print(f" -> [ERRO] {exc}")
+
+
+def ligar_eletroima(esp: ESP32Communication):
+    """Liga o eletroímã imediatamente."""
+    print("\n[*] Acionando Eletroima...")
+    try:
+        esp.acionar_eletroima(True, timeout=5.0)
+        print(" -> [OK] Eletroima LIGADO!")
+    except Exception as exc:
+        print(f" -> [ERRO] {exc}")
+
+
+def desligar_eletroima(esp: ESP32Communication):
+    """Desliga o eletroímã imediatamente."""
+    print("\n[*] Desligando Eletroima...")
+    try:
+        esp.acionar_eletroima(False, timeout=5.0)
+        print(" -> [OK] Eletroima DESLIGADO!")
+    except Exception as exc:
+        print(f" -> [ERRO] {exc}")
+
+
+def executar_homing(esp: ESP32Communication):
+    """Executa o ciclo de Homing e zera as coordenadas em (0, 0)."""
+    print("\n[*] Executando ciclo de Homing (zero de maquina)...")
+    try:
+        t0 = time.monotonic()
+        esp.homing(timeout=120.0)
+        t_total = time.monotonic() - t0
+        time.sleep(0.2)
+        st = esp.obter_status(timeout=2.0)
+        print(f" -> [OK] Homing concluido em {t_total:.1f}s!")
+        print(f"    Posicao atual: X={st.get('x', 0.0)} mm | Y={st.get('y', 0.0)} mm | Homed: {st.get('homed')}")
+    except Exception as exc:
+        print(f" -> [ERRO] Falha no Homing: {exc}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Utilitário de Teste de Comunicação Raspberry Pi <-> ESP32"
+        description="Teste de Motores e Eletroímã (ESP32 <-> Raspberry Pi)"
     )
     parser.add_argument("--port", "-p", help="Porta serial manual (ex: /dev/ttyUSB0 ou COM3)")
     parser.add_argument("--baud", "-b", type=int, default=115200, help="Baudrate (padrao: 115200)")
-    parser.add_argument("--auto", "-a", action="store_true", help="Executa diagnostico automatico e sai")
     args = parser.parse_args()
 
     print("==================================================")
-    print("  Teste de Comunicacao ESP32 <-> Raspberry Pi     ")
+    print("  Teste de Motores e Eletroima (ESP32 <-> RPi)    ")
     print("==================================================")
 
-    # 1. Listar portas
     listar_portas()
 
-    # 2. Conectar ao ESP32
     print(f"\nTentando conectar ao ESP32 (baudrate: {args.baud})...")
-    esp = ESP32Communication(porta=args.port, baudrate=args.baud, timeout=1.0, verbose=True)
+    esp = ESP32Communication(porta=args.port, baudrate=args.baud, timeout=1.0, verbose=False)
 
     try:
         esp.conectar()
     except Exception as exc:
-        print(f"\n[ERRO CRITICO] Nao foi possivel conectar: {exc}")
-        print("\nVerificacoes recomendadas na Raspberry Pi:")
-        print("1. O usuario tem permissao na porta serial? Execute:")
-        print("   sudo usermod -a -G dialout $USER")
-        print("   (depois reinicie a sessao ou faca logout/login)")
-        print("2. A porta esta ocupada por outro processo? Verifique com:")
-        print("   lsof | grep ttyUSB")
-        print("3. O firmware no ESP32 foi gravado corretamente a 115200 baud?")
+        print(f"\n[ERRO CRITICO] Nao foi possivel conectar ao ESP32: {exc}")
         sys.exit(1)
 
-    print("[OK] Conexao serial estabelecida!")
+    print("[OK] Conexao serial estabelecida com sucesso!")
+    try:
+        st_inicial = esp.obter_status(timeout=3.0)
+        print(f"Status inicial: X={st_inicial.get('x', '?')} mm, Y={st_inicial.get('y', '?')} mm, Homed={st_inicial.get('homed')}")
+    except Exception:
+        pass
 
-    if args.auto:
-        diagnostico_completo(esp)
-        esp.fechar()
-        return
-
-    # Menu interativo
     try:
         while True:
-            print("\n--- MENU DE TESTES ---")
-            print("1 - Teste de Status (Ping / JSON)")
-            print("2 - Teste do Eletroíma (Liga 2s e Desliga)")
-            print("3 - Teste dos Fins de Curso (Monitoramento continuo)")
-            print("4 - Teste dos Drivers de Passo (Trava / Destrava motores)")
-            print("5 - Teste de Movimento de Eixo (Escolha X ou Y e distancia em mm)")
-            print("6 - Teste de Homing (Zero de maquina)")
-            print("7 - Console Serial Interativo (Comandos manuais)")
-            print("8 - Executar Diagnostico Completo")
+            print("\n------------------------------------")
+            print("         MENU DE TESTES             ")
+            print("------------------------------------")
+            print("1 - Mover no eixo X")
+            print("2 - Mover no eixo Y")
+            print("3 - Ligar Eletroima")
+            print("4 - Desligar Eletroima")
+            print("5 - Homing")
             print("0 - Sair")
+            print("------------------------------------")
 
-            opcao = input("\nEscolha uma opcao [0-8]: ").strip()
+            opcao = input("Escolha uma opcao [0-5]: ").strip()
             if opcao == "1":
-                teste_status(esp)
+                mover_x(esp)
             elif opcao == "2":
-                teste_eletroima(esp)
+                mover_y(esp)
             elif opcao == "3":
-                teste_fins_de_curso(esp)
+                ligar_eletroima(esp)
             elif opcao == "4":
-                teste_drivers_torque(esp)
+                desligar_eletroima(esp)
             elif opcao == "5":
-                teste_movimento_eixo(esp)
-            elif opcao == "6":
-                teste_homing(esp)
-            elif opcao == "7":
-                console_interativo(esp)
-            elif opcao == "8":
-                diagnostico_completo(esp)
+                executar_homing(esp)
             elif opcao in ("0", "sair", "exit", "q"):
                 print("Encerrando...")
                 break
             else:
-                print("Opcao invalida, tente novamente.")
+                print("Opcao invalida. Digite de 0 a 5.")
     finally:
         esp.fechar()
 

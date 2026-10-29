@@ -18,14 +18,14 @@ INVERT_Y = True
 HOME_CELL = (7, 0)        # celula logica (linha, coluna) mais proxima do home do Gantry
 
 # O jogo pensa em x = 0..800 (16 colunas) e y = 0..400 (8 linhas). No gantry montado
-# o lado de 800 mm e o eixo Y (perfis de 900, frente -> tras) e o de 400 mm e o X
-# (viga, esquerda -> direita, olhando com os motores na frente). Home = (400, 0).
+# o lado de 650 mm e o eixo Y (perfis de 900, frente -> tras) e o de 350 mm e o X
+# (viga, esquerda -> direita, olhando com os motores na frente). Home = (0, 0).
 # game_to_gantry() converte; ajuste os flags com o teste "cantos" (teste_integracao.py).
 GANTRY_SWAP_XY = True     # True: x do jogo -> Y do gantry, y do jogo -> X do gantry
-GANTRY_FLIP_X = False     # depois da troca: X_gantry = 400 - X_gantry
-GANTRY_FLIP_Y = False     # depois da troca: Y_gantry = 800 - Y_gantry
+GANTRY_FLIP_X = False     # depois da troca: X_gantry = 350 - X_gantry
+GANTRY_FLIP_Y = False     # depois da troca: Y_gantry = 650 - Y_gantry
 GANTRY_OFFSET_MM = (0.0, 0.0)   # (X, Y) somado no fim: onde fica o canto do tabuleiro
-GANTRY_SIZE_MM = (400.0, 800.0) # curso util (X, Y), igual ao CURSO_X/CURSO_Y do ESP32
+GANTRY_SIZE_MM = (350.0, 650.0) # curso util (X, Y), igual ao CURSO_X/CURSO_Y do ESP32
 
 
 def game_to_gantry(x: float, y: float) -> tuple[float, float]:
