@@ -12,7 +12,7 @@
 //   Fim de curso X: D32 (J4), no lado direito
 //   Fim de curso Y: D33 (J5), na frente
 //
-// Área: X 0..350 mm, Y 0..650 mm. Home = (3, 8), canto da frente à direita com offset.
+// Área: X 0..350 mm, Y 0..650 mm. Home = (0, 0), com recuo pós-chave de 5 mm em X e 10 mm em Y.
 
 #include <Arduino.h>
 #include "Gantry.h"

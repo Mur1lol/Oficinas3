@@ -21,10 +21,9 @@ class Gantry {
   // Home fica exatamente em (0, 0).
   static constexpr float CURSO_X     = 350.0f;  // Limite útil X em mm (0..350)
   static constexpr float CURSO_Y     = 650.0f;  // Limite útil Y em mm (0..650)
-  static constexpr float V_INICIAL   = 5.0f;    // mm/s no início/fim da rampa
-  static constexpr float MARGEM_HOME = 2.0f;    // Recuo de segurança após fim de curso
-  static constexpr float HOME_X      = 3.0f;    // Posição de repouso X pós-homing (mm)
-  static constexpr float HOME_Y      = 8.0f;    // Posição de repouso Y pós-homing (mm)
+  static constexpr float V_INICIAL    = 5.0f;    // mm/s no início/fim da rampa
+  static constexpr float RECUO_HOME_X = 5.0f;    // Recuo pós-homing no eixo X (mm)
+  static constexpr float RECUO_HOME_Y = 10.0f;   // Recuo pós-homing no eixo Y (mm)
 
   Gantry(uint8_t aStep = 26, uint8_t aDir = 27,
          uint8_t bStep = 18, uint8_t bDir = 19,
@@ -183,14 +182,14 @@ class Gantry {
       return false;
     }
 
-    // O ponto onde os sensores acionaram fica a -MARGEM_HOME em relação a (HOME_X, HOME_Y)
-    definirPosicao(HOME_X - MARGEM_HOME, HOME_Y - MARGEM_HOME);
-    // Recua MARGEM_HOME (2 mm) para dentro da mesa (+X e +Y), parando exatamente em (HOME_X, HOME_Y)
-    if (mover(MARGEM_HOME, MARGEM_HOME, 0, 15, false) != MOV_OK) {
+    // O ponto onde os sensores acionaram fica a (-RECUO_HOME_X, -RECUO_HOME_Y)
+    definirPosicao(-RECUO_HOME_X, -RECUO_HOME_Y);
+    // Recua 5 mm em X e 10 mm em Y para dentro da mesa (+X e +Y), parando exatamente no zero (0, 0)
+    if (mover(RECUO_HOME_X, RECUO_HOME_Y, 0, 15, false) != MOV_OK) {
       return false;
     }
 
-    definirPosicao(HOME_X, HOME_Y);
+    definirPosicao(0.0f, 0.0f);
     homed_ = true;
     return true;
   }
@@ -229,8 +228,9 @@ class Gantry {
     float uy = (eixo == 'Y') ? 1.0f : 0.0f;
     float maxMm = (eixo == 'X') ? (CURSO_X + 50.0f) : (CURSO_Y + 50.0f);
 
-    // Se já estiver acionado, dá um pequeno passo para a frente (+5 mm) para desencostar
-    if (f.acionado()) mover(5.0f * ux, 5.0f * uy, 0, 10, false);
+    // Se já estiver acionado, dá um passo para a frente para desencostar da chave
+    float desencosta = (eixo == 'X') ? 6.0f : 12.0f;
+    if (f.acionado()) mover(desencosta * ux, desencosta * uy, 0, 10, false);
     if (f.acionado()) return false;
 
     // Busca rápida (15 mm/s) no sentido da chave (-X ou -Y)
