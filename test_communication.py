@@ -60,7 +60,8 @@ def mover_x(esp: ESP32Communication):
         esp.mover_eixo("X", dist_mm, timeout=30.0)
         time.sleep(0.2)
         st = esp.obter_status(timeout=2.0)
-        print(f" -> [OK] Posicao atual: X={st.get('x', '?')} mm | Y={st.get('y', '?')} mm")
+        ima_st = "LIGADO" if st.get("eletroima") else "desligado"
+        print(f" -> [OK] Posicao: X={st.get('x', '?')} mm | Y={st.get('y', '?')} mm | Eletroima: {ima_st}")
     except Exception as exc:
         print(f" -> [ERRO] {exc}")
 
@@ -80,7 +81,8 @@ def mover_y(esp: ESP32Communication):
         esp.mover_eixo("Y", dist_mm, timeout=30.0)
         time.sleep(0.2)
         st = esp.obter_status(timeout=2.0)
-        print(f" -> [OK] Posicao atual: X={st.get('x', '?')} mm | Y={st.get('y', '?')} mm")
+        ima_st = "LIGADO" if st.get("eletroima") else "desligado"
+        print(f" -> [OK] Posicao: X={st.get('x', '?')} mm | Y={st.get('y', '?')} mm | Eletroima: {ima_st}")
     except Exception as exc:
         print(f" -> [ERRO] {exc}")
 

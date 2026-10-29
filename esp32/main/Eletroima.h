@@ -4,7 +4,7 @@
 
 class Eletroima {
  public:
-  Eletroima(uint8_t pino, uint32_t tempoMaxMs = 20000, uint32_t freqHz = 1000)
+  Eletroima(uint8_t pino, uint32_t tempoMaxMs = 0, uint32_t freqHz = 1000)
       : pino_(pino), tempoMaxMs_(tempoMaxMs), freqHz_(freqHz) {}
 
   void iniciar() {

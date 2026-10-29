@@ -155,9 +155,6 @@ class Comunication {
       delete[] posY;
       delete[] posIma;
 
-      // Desliga o eletroima por seguranca
-      gantry.eletroima().desligar();
-
       if (res == MOV_OK) {
         responderOk();
       } else if (res == MOV_BATEU_FIM_CURSO) {
