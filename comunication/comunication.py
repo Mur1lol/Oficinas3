@@ -168,6 +168,22 @@ class ESP32Communication:
         self.enviar_comando("homing")
         return self._aguardar_ok(timeout, "homing")
 
+    def mover_eixo(self, eixo: str, distancia_mm: float, timeout=30.0):
+        """Envia comando para o ESP32 mover o gantry em um eixo específico pela distância em mm.
+
+        eixo: 'X' ou 'Y'
+        distancia_mm: distância em mm (positivo ou negativo)
+        """
+        eixo_str = str(eixo).strip().upper()
+        if eixo_str not in ("X", "Y"):
+            raise ValueError(f"Eixo inválido: '{eixo}'. Deve ser 'X' ou 'Y'.")
+        self.ser.reset_input_buffer()
+        self.enviar_comando("mover", {
+            "eixo": eixo_str,
+            "distancia": float(distancia_mm),
+        })
+        return self._aguardar_ok(timeout, f"mover {eixo_str} {distancia_mm}mm")
+
     def acionar_eletroima(self, ligar=True, timeout=None):
         """Liga ou desliga o eletroímã imediatamente."""
         self.ser.reset_input_buffer()

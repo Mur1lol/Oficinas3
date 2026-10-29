@@ -97,6 +97,18 @@ class Comunication {
       responderOk("eletroima desligado");
     } else if (str == "p" || str == "status") {
       responderStatus(gantry);
+    } else if (str.startsWith("x ") || str.startsWith("y ")) {
+      char eixo = toupper(str.charAt(0));
+      float dist = str.substring(2).toFloat();
+      if (!gantry.estaHabilitado()) gantry.habilitar(true);
+      ResultadoMovimento res = (eixo == 'X') ? gantry.mover(dist, 0.0f) : gantry.mover(0.0f, dist);
+      if (res == MOV_OK) {
+        responderOk("movimento concluido");
+      } else if (res == MOV_BATEU_FIM_CURSO) {
+        responderErro("fim de curso acionado");
+      } else {
+        responderErro("erro no movimento");
+      }
     } else {
       responderErro("comando texto desconhecido");
     }
@@ -188,6 +200,36 @@ class Comunication {
     // ── Comando "status" em JSON ──
     if (strcmp(comando, "status") == 0) {
       responderStatus(gantry);
+      return;
+    }
+
+    // ── Comando "mover" em JSON: desloca no eixo X ou Y em milímetros ──
+    if (strcmp(comando, "mover") == 0) {
+      float dx = 0.0f;
+      float dy = 0.0f;
+      if (doc["resposta"].is<JsonObject>()) {
+        JsonObject rsp = doc["resposta"];
+        if (rsp.containsKey("eixo")) {
+          const char* eixo = rsp["eixo"] | "X";
+          float dist = rsp["distancia"] | 0.0f;
+          if (toupper(eixo[0]) == 'X') dx = dist;
+          else if (toupper(eixo[0]) == 'Y') dy = dist;
+        } else {
+          dx = rsp["dx"] | 0.0f;
+          dy = rsp["dy"] | 0.0f;
+        }
+      }
+      if (!gantry.estaHabilitado()) {
+        gantry.habilitar(true);
+      }
+      ResultadoMovimento res = gantry.mover(dx, dy);
+      if (res == MOV_OK) {
+        responderOk("movimento concluido");
+      } else if (res == MOV_BATEU_FIM_CURSO) {
+        responderErro("fim de curso acionado");
+      } else {
+        responderErro("erro no movimento");
+      }
       return;
     }
 

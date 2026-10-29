@@ -216,18 +216,24 @@ def teste_drivers_torque(esp: ESP32Communication):
     return True
 
 
-def teste_pequeno_movimento(esp: ESP32Communication):
-    """Testa um deslocamento seguro de 20mm para verificar a cinemática CoreXY."""
-    print("\n[*] ATENCAO: Posicione o carro aproximadamente no CENTRO da mesa!")
-    conf = input("O gantry possui curso livre para se mover 20mm? (s/N): ").strip().lower()
-    if conf not in ("s", "sim", "y", "yes"):
-        print(" -> Movimento cancelado.")
+def teste_movimento_eixo(esp: ESP32Communication):
+    """Envia comando para o ESP32 mover o gantry no eixo X ou Y pela distância em mm."""
+    print("\n[*] Teste de Movimentacao de Eixo (X ou Y em mm)")
+    eixo = input("Qual eixo deseja mover? (X / Y) [padrao: X]: ").strip().upper()
+    if eixo not in ("X", "Y"):
+        eixo = "X"
+
+    dist_str = input(f"Distancia em mm para o eixo {eixo} (ex: 20 ou -20) [padrao: 10]: ").strip()
+    try:
+        dist_mm = float(dist_str) if dist_str else 10.0
+    except ValueError:
+        print("Valor invalido.")
         return False
 
-    print("[*] Enviando comando gantry: deslocamento de 20mm...")
+    print(f"[*] Enviando comando para mover eixo {eixo} em {dist_mm} mm...")
     try:
-        esp.gantry(x=[20.0], y=[20.0], eletroima=[0], timeout=15.0)
-        print(" -> [OK] Movimento executado e confirmado pelo ESP32!")
+        esp.mover_eixo(eixo, dist_mm, timeout=20.0)
+        print(f" -> [OK] Eixo {eixo} moveu {dist_mm} mm com sucesso!")
         return True
     except Exception as exc:
         print(f" -> [FALHA] Falha no movimento: {exc}")
@@ -282,7 +288,7 @@ def main():
             print("2 - Teste do Eletroíma (Liga 2s e Desliga)")
             print("3 - Teste dos Fins de Curso (Monitoramento continuo)")
             print("4 - Teste dos Drivers de Passo (Trava / Destrava motores)")
-            print("5 - Teste de Movimento Curto Seguro (20mm)")
+            print("5 - Teste de Movimento de Eixo (Escolha X ou Y e distancia em mm)")
             print("6 - Teste de Homing (Zero de maquina)")
             print("7 - Console Serial Interativo (Comandos manuais)")
             print("8 - Executar Diagnostico Completo")
@@ -298,7 +304,7 @@ def main():
             elif opcao == "4":
                 teste_drivers_torque(esp)
             elif opcao == "5":
-                teste_pequeno_movimento(esp)
+                teste_movimento_eixo(esp)
             elif opcao == "6":
                 teste_homing(esp)
             elif opcao == "7":
