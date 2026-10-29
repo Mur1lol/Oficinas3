@@ -119,20 +119,24 @@ class Lcd:
             log.warning("Nenhum LCD real - usando simulacao.")
         self._last = None
 
-    def show(self, line1: str = "", line2: str = "") -> None:
-        lines = (line1[:cfg.LCD_COLS].ljust(cfg.LCD_COLS), line2[:cfg.LCD_COLS].ljust(cfg.LCD_COLS))
-        if lines == self._last:
+    def show(self, *lines: str) -> None:
+        num_rows = min(len(lines), cfg.LCD_ROWS)
+        formatted = tuple(
+            (lines[i][:cfg.LCD_COLS] if i < len(lines) else "").ljust(cfg.LCD_COLS)
+            for i in range(cfg.LCD_ROWS)
+        )
+        if formatted == self._last:
             return
-        self._last = lines
+        self._last = formatted
         if not self._lcds:
-            print(f"   [LCD] |{lines[0]}|\n         |{lines[1]}|")
+            for i in range(num_rows or 2):
+                print(f"   [LCD L{i+1}] |{formatted[i]}|")
             return
         for lcd in self._lcds:
             try:
-                lcd.cursor_pos = (0, 0)
-                lcd.write_string(lines[0])
-                lcd.cursor_pos = (1, 0)
-                lcd.write_string(lines[1])
+                for row_idx in range(cfg.LCD_ROWS):
+                    lcd.cursor_pos = (row_idx, 0)
+                    lcd.write_string(formatted[row_idx])
             except Exception as exc:                         # noqa: BLE001
                 log.warning("Falha ao escrever no LCD: %s", exc)
 
