@@ -96,18 +96,27 @@ class StatusLeds:
 # ---------------------------------------------------------------------------
 
 class Lcd:
-    """LCD 16x2 via I2C (PCF8574). Fallback: imprime no terminal."""
+    """LCDs 20x4 via I2C (PCF8574), um por painel, todos com o mesmo texto.
+
+    Um LCD que nao responder fica de fora sem derrubar os outros.
+    Fallback (nenhum LCD): imprime no terminal.
+    """
 
     def __init__(self, simulate: bool = False) -> None:
-        self._lcd = None
+        self._lcds = []
         if not simulate:
-            try:
-                from RPLCD.i2c import CharLCD
-                self._lcd = CharLCD("PCF8574", cfg.LCD_I2C_ADDRESS, port=cfg.LCD_I2C_PORT,
-                                    cols=cfg.LCD_COLS, rows=cfg.LCD_ROWS)
-            except Exception as exc:                         # noqa: BLE001
-                log.warning("LCD real indisponivel (%s) - usando simulacao.", exc)
-        self.simulated = self._lcd is None
+            for addr in cfg.LCD_I2C_ADDRESSES:
+                try:
+                    from RPLCD.i2c import CharLCD
+                    lcd = CharLCD("PCF8574", addr, port=cfg.LCD_I2C_PORT,
+                                  cols=cfg.LCD_COLS, rows=cfg.LCD_ROWS)
+                    lcd.clear()
+                    self._lcds.append(lcd)
+                except Exception as exc:                     # noqa: BLE001
+                    log.warning("LCD 0x%02X indisponivel (%s).", addr, exc)
+        self.simulated = not self._lcds
+        if self.simulated and not simulate:
+            log.warning("Nenhum LCD real - usando simulacao.")
         self._last = None
 
     def show(self, line1: str = "", line2: str = "") -> None:
@@ -115,22 +124,22 @@ class Lcd:
         if lines == self._last:
             return
         self._last = lines
-        if self._lcd is None:
+        if not self._lcds:
             print(f"   [LCD] |{lines[0]}|\n         |{lines[1]}|")
             return
-        try:
-            self._lcd.cursor_pos = (0, 0)
-            self._lcd.write_string(lines[0])
-            self._lcd.cursor_pos = (1, 0)
-            self._lcd.write_string(lines[1])
-        except Exception as exc:                             # noqa: BLE001
-            log.warning("Falha ao escrever no LCD: %s", exc)
+        for lcd in self._lcds:
+            try:
+                lcd.cursor_pos = (0, 0)
+                lcd.write_string(lines[0])
+                lcd.cursor_pos = (1, 0)
+                lcd.write_string(lines[1])
+            except Exception as exc:                         # noqa: BLE001
+                log.warning("Falha ao escrever no LCD: %s", exc)
 
     def close(self) -> None:
-        if self._lcd is not None:
+        for lcd in self._lcds:
             try:
-                self._lcd.clear()
-                self._lcd.close(clear=True)
+                lcd.close(clear=True)
             except Exception:                                # noqa: BLE001
                 pass
 

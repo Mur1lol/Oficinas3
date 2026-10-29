@@ -9,8 +9,10 @@
 //   Motor B: STEP = D18, DIR = D19
 //   EN_MOT:  D23 (ativo em LOW)
 //   Eletroímã: D25 (TIP31C)
-//   Fim de curso X: D32 (J4)
-//   Fim de curso Y: D33 (J5)
+//   Fim de curso X: D32 (J4), no lado direito
+//   Fim de curso Y: D33 (J5), na frente
+//
+// Área: X 0..400 mm (viga), Y 0..800 mm (perfis de 900). Home = (400, 0), canto da frente à direita.
 
 #include <Arduino.h>
 #include "Gantry.h"
@@ -22,8 +24,9 @@ Gantry gantry(
     18, 19,  // Motor B: Step, Dir
     23,      // Enable dos motores (ativo em LOW)
     25,      // Pino do eletroímã
-    32, 33,  // Fins de curso: X (D32), Y (D33)
-    true     // Fim de curso ativo em nível ALTO
+    32, 33,  // Fins de curso: X (D32, lado direito), Y (D33, frente)
+    false,   // Módulos de fim de curso: ativo em nível BAIXO
+    false, false, false  // inverterA, inverterB, trocarAB: os mesmos do teste_gantry
 );
 
 Comunication comunicacao(115200);

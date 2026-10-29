@@ -162,7 +162,8 @@ class ESP32Communication:
         })
         return self._aguardar_ok(timeout or self.GANTRY_TIMEOUT, "gantry")
 
-    def homing(self, timeout=30.0):
+    def homing(self, timeout=120.0):
+        # Pior caso: ~450 mm em X + ~850 mm em Y a 15 mm/s = ~90 s
         """Solicita o homing do gantry nos eixos X e Y."""
         self.ser.reset_input_buffer()
         self.enviar_comando("homing")

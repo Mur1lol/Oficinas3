@@ -41,8 +41,10 @@ class EspGantry:
 
     def execute(self, x, y, eletroima) -> None:
         """Bloqueia ate o ESP32 responder 'ok' (movimento concluido)."""
+        pts = [cfg.game_to_gantry(xi, yi) for xi, yi in zip(x, y)]
         try:
-            self._esp.gantry(x, y, eletroima, timeout=cfg.GANTRY_TIMEOUT_S)
+            self._esp.gantry([p[0] for p in pts], [p[1] for p in pts], eletroima,
+                             timeout=cfg.GANTRY_TIMEOUT_S)
         except Exception as exc:                              # noqa: BLE001
             raise GantryError(str(exc)) from exc
 
@@ -65,9 +67,10 @@ class SimulatedGantry:
         print("   [GANTRY] (simulado) homing ok")
 
     def execute(self, x, y, eletroima) -> None:
-        print(f"   [GANTRY] (simulado) {len(x)} passos:")
+        print(f"   [GANTRY] (simulado) {len(x)} passos (coordenadas do ESP32):")
         for xi, yi, mi in zip(x, y, eletroima):
-            print(f"      -> x={xi:6.1f} y={yi:6.1f} ima={'ON ' if mi else 'off'}")
+            gx, gy = cfg.game_to_gantry(xi, yi)
+            print(f"      -> X={gx:6.1f} Y={gy:6.1f} ima={'ON ' if mi else 'off'}")
         time.sleep(self.SIM_SECONDS_PER_STEP * len(x))
         print("   [GANTRY] (simulado) retornando ao homing (x=   0.0 y=   0.0 ima=off)")
 

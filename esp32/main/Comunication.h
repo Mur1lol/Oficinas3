@@ -158,15 +158,12 @@ class Comunication {
       // Desliga o eletroima por seguranca
       gantry.eletroima().desligar();
 
-      // Antes de responder que o movimento foi finalizado, retorna o gantry para o Homing (0,0)
-      if (res == MOV_OK) {
-        res = gantry.irPara(0.0f, 0.0f);
-      }
-
       if (res == MOV_OK) {
         responderOk();
       } else if (res == MOV_BATEU_FIM_CURSO) {
         responderErro("fim de curso acionado durante o movimento");
+      } else if (res == MOV_ERRO_SEM_HOME) {
+        responderErro("faca o homing antes");
       } else if (res == MOV_ABORTADO) {
         responderErro("movimento abortado pela serial");
       } else {

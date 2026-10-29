@@ -16,8 +16,13 @@ enum ResultadoMovimento {
 class Gantry {
  public:
   static constexpr float PASSOS_MM   = 80.0f;   // 200 * 16 / (polia 20 dentes * 2 mm)
-  static constexpr float CURSO_X     = 800.0f;  // Limite útil X em mm
-  static constexpr float CURSO_Y     = 400.0f;  // Limite útil Y em mm
+  // X anda na viga de 550 mm (curso real ~410 mm), Y nos perfis de 900 mm (~806 mm).
+  // Olhando de frente (motores na frente): +X = direita, +Y = para trás.
+  static constexpr float CURSO_X     = 400.0f;  // Limite útil X em mm
+  static constexpr float CURSO_Y     = 800.0f;  // Limite útil Y em mm
+  // Fins de curso: X no lado DIREITO (+X), Y na FRENTE (-Y). Home = (400, 0).
+  static constexpr bool HOME_X_NO_MAX = true;
+  static constexpr bool HOME_Y_NO_MAX = false;
   static constexpr float V_INICIAL   = 5.0f;    // mm/s no início/fim da rampa
   static constexpr float MARGEM_HOME = 2.0f;    // Zero fica 2 mm antes dos fins de curso
 
@@ -26,8 +31,9 @@ class Gantry {
          uint8_t enMot = 23,
          uint8_t pinoIma = 25,
          uint8_t pinoFimX = 32, uint8_t pinoFimY = 33,
-         bool fimAtivoAlto = true)
-      : motores_(aStep, aDir, bStep, bDir, enMot),
+         bool fimAtivoAlto = false,
+         bool inverterA = false, bool inverterB = false, bool trocarAB = false)
+      : motores_(aStep, aDir, bStep, bDir, enMot, inverterA, inverterB, trocarAB),
         eletroima_(pinoIma),
         fimX_(pinoFimX, fimAtivoAlto),
         fimY_(pinoFimY, fimAtivoAlto) {}
@@ -122,7 +128,9 @@ class Gantry {
 
       bool fx = fimX_.acionado();
       bool fy = fimY_.acionado();
-      bool bate = (procurar == 'X') ? fx : (procurar == 'Y') ? fy : ((fx && dx < 0) || (fy && dy < 0));
+      // Fora do homing, só para se o carro estiver indo NA DIREÇÃO da chave acionada
+      bool bate = (procurar == 'X') ? fx : (procurar == 'Y') ? fy
+                : ((fx && dx * sentidoX() > 0) || (fy && dy * sentidoY() > 0));
       contaFim = bate ? (contaFim + 1) : 0;
       if (contaFim >= 3) {
         r = MOV_BATEU_FIM_CURSO;
@@ -170,8 +178,9 @@ class Gantry {
       return false;
     }
 
-    definirPosicao(-MARGEM_HOME, -MARGEM_HOME);
-    if (mover(MARGEM_HOME, MARGEM_HOME, 0, 15, false) != MOV_OK) {
+    // O ponto onde as chaves acionaram fica 2 mm além do home
+    definirPosicao(homeX() + sentidoX() * MARGEM_HOME, homeY() + sentidoY() * MARGEM_HOME);
+    if (mover(-sentidoX() * MARGEM_HOME, -sentidoY() * MARGEM_HOME, 0, 15, false) != MOV_OK) {
       return false;
     }
 
@@ -182,6 +191,8 @@ class Gantry {
   // Executa uma sequência completa de movimentos e controle do eletroímã (ex: vinda do Python)
   // x e y são posições absolutas ou relativas conforme a lógica do jogo (padrão absoluto em mm)
   ResultadoMovimento executarTrajetoria(const float* x, const float* y, const int* ima, size_t tamanho) {
+    // Sem homing as coordenadas não valem nada (o carro bateria nas laterais)
+    if (!homed_) return MOV_ERRO_SEM_HOME;
     if (!motores_.estaHabilitado()) {
       motores_.habilitar(true);
     }
@@ -197,6 +208,7 @@ class Gantry {
       // Desloca para a posição do passo
       ResultadoMovimento res = irPara(x[i], y[i]);
       if (res != MOV_OK) {
+        eletroima_.desligar();
         return res;
       }
     }
@@ -204,10 +216,16 @@ class Gantry {
   }
 
  private:
+  static float sentidoX() { return HOME_X_NO_MAX ? 1.0f : -1.0f; }  // lado em que fica a chave
+  static float sentidoY() { return HOME_Y_NO_MAX ? 1.0f : -1.0f; }
+  static float homeX() { return HOME_X_NO_MAX ? CURSO_X : 0.0f; }
+  static float homeY() { return HOME_Y_NO_MAX ? CURSO_Y : 0.0f; }
+
   bool procurarFim(char eixo, float& achou) {
     const FimDeCurso& f = (eixo == 'X') ? fimX_ : fimY_;
-    float ux = (eixo == 'X') ? 1.0f : 0.0f;
-    float uy = (eixo == 'Y') ? 1.0f : 0.0f;
+    // u = sentido de AFASTAR da chave (a busca anda em -u)
+    float ux = (eixo == 'X') ? -sentidoX() : 0.0f;
+    float uy = (eixo == 'Y') ? -sentidoY() : 0.0f;
     float maxMm = (eixo == 'X') ? (CURSO_X + 50.0f) : (CURSO_Y + 50.0f);
 
     // Se já estiver acionado, dá um pequeno passo à frente para desencostar

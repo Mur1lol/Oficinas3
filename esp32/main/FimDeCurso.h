@@ -4,11 +4,13 @@
 
 class FimDeCurso {
  public:
-  FimDeCurso(uint8_t pino, bool ativoEmAlto = true)
+  FimDeCurso(uint8_t pino, bool ativoEmAlto = false)
       : pino_(pino), ativoEmAlto_(ativoEmAlto) {}
 
   void iniciar() {
-    pinMode(pino_, INPUT);
+    // Módulo de 3 fios: o sinal vai a 0 V quando aperta. O pull-up interno segura
+    // o pino em 3V3 se o fio soltar (lê como acionado, o que é o lado seguro).
+    pinMode(pino_, INPUT_PULLUP);
   }
 
   // Retorna true se o fim de curso estiver acionado no momento
