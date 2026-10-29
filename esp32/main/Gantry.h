@@ -22,7 +22,9 @@ class Gantry {
   static constexpr float CURSO_X     = 350.0f;  // Limite útil X em mm (0..350)
   static constexpr float CURSO_Y     = 650.0f;  // Limite útil Y em mm (0..650)
   static constexpr float V_INICIAL   = 5.0f;    // mm/s no início/fim da rampa
-  static constexpr float MARGEM_HOME = 2.0f;    // Zero fica 2 mm antes dos fins de curso
+  static constexpr float MARGEM_HOME = 2.0f;    // Recuo de segurança após fim de curso
+  static constexpr float HOME_X      = 3.0f;    // Posição de repouso X pós-homing (mm)
+  static constexpr float HOME_Y      = 8.0f;    // Posição de repouso Y pós-homing (mm)
 
   Gantry(uint8_t aStep = 26, uint8_t aDir = 27,
          uint8_t bStep = 18, uint8_t bDir = 19,
@@ -181,14 +183,14 @@ class Gantry {
       return false;
     }
 
-    // O ponto onde os sensores acionaram fica a -MARGEM_HOME
-    definirPosicao(-MARGEM_HOME, -MARGEM_HOME);
-    // Recua MARGEM_HOME (2 mm) para dentro da mesa (+X e +Y), parando exatamente em (0, 0)
+    // O ponto onde os sensores acionaram fica a -MARGEM_HOME em relação a (HOME_X, HOME_Y)
+    definirPosicao(HOME_X - MARGEM_HOME, HOME_Y - MARGEM_HOME);
+    // Recua MARGEM_HOME (2 mm) para dentro da mesa (+X e +Y), parando exatamente em (HOME_X, HOME_Y)
     if (mover(MARGEM_HOME, MARGEM_HOME, 0, 15, false) != MOV_OK) {
       return false;
     }
 
-    definirPosicao(0.0f, 0.0f);
+    definirPosicao(HOME_X, HOME_Y);
     homed_ = true;
     return true;
   }

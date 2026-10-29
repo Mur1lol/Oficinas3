@@ -108,7 +108,7 @@ def desligar_eletroima(esp: ESP32Communication):
 
 
 def executar_homing(esp: ESP32Communication):
-    """Executa o ciclo de Homing e zera as coordenadas em (0, 0)."""
+    """Executa o ciclo de Homing e define as coordenadas de repouso em (3, 8)."""
     print("\n[*] Executando ciclo de Homing (zero de maquina)...")
     try:
         t0 = time.monotonic()
@@ -117,7 +117,7 @@ def executar_homing(esp: ESP32Communication):
         time.sleep(0.2)
         st = esp.obter_status(timeout=2.0)
         print(f" -> [OK] Homing concluido em {t_total:.1f}s!")
-        print(f"    Posicao atual: X={st.get('x', 0.0)} mm | Y={st.get('y', 0.0)} mm | Homed: {st.get('homed')}")
+        print(f"    Posicao atual: X={st.get('x', 3.0)} mm | Y={st.get('y', 8.0)} mm | Homed: {st.get('homed')}")
     except Exception as exc:
         print(f" -> [ERRO] Falha no Homing: {exc}")
 
