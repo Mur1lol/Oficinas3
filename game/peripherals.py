@@ -19,12 +19,25 @@ from . import config as cfg
 log = logging.getLogger(__name__)
 
 COLORS = {
-    "off":   (0, 0, 0),
-    "blue":  (0, 0, 1),
-    "green": (0, 1, 0),
-    "red":   (1, 0, 0),
+    "off":     (0, 0, 0),
+    "red":     (1, 0, 0),
+    "green":   (0, 1, 0),
+    "blue":    (0, 0, 1),
+    "yellow":  (1, 1, 0),
+    "magenta": (1, 0, 1),
+    "cyan":    (0, 1, 1),
+    "white":   (1, 1, 1),
 }
-COLOR_PT = {"off": "apagado", "blue": "AZUL", "green": "VERDE", "red": "VERMELHO"}
+COLOR_PT = {
+    "off":     "apagado",
+    "red":     "VERMELHO",
+    "green":   "VERDE",
+    "blue":    "AZUL",
+    "yellow":  "AMARELO",
+    "magenta": "MAGENTA",
+    "cyan":    "CIANO",
+    "white":   "BRANCO",
+}
 
 
 # ---------------------------------------------------------------------------
