@@ -65,7 +65,7 @@ TTS_RATE = 150            # palavras por minuto (apenas fallback pyttsx3/espeak)
 TTS_VOICE_HINT = "english"
 # Voz neural (Piper). Baixe com: uv run python baixar_voz.py
 # Se o modelo nao existir, cai para pyttsx3/espeak (voz robotica).
-TTS_PIPER_MODEL = ROOT / "voice" / "models" / "en_US-amy-medium.onnx"
+TTS_PIPER_MODEL = ROOT / "voice" / "models" / "en_US-ryan-low.onnx"
 
 # ── Voz ───────────────────────────────────────────────────────────────────────
 VOICE_CONFIG = ROOT / "voice.toml"
