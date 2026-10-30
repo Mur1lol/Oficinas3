@@ -24,10 +24,15 @@ def list_audio_devices() -> list[dict]:
 
 
 def select_device(devices: list[dict], name: str) -> int:
+    if not devices:
+        raise AudioError("No audio input devices found.")
     matches = [d for d in devices if name.casefold() in d["name"].casefold()]
-    if len(matches) != 1:
-        raise AudioError(f"Expected one microphone matching {name!r}; found {len(matches)}")
-    return int(matches[0]["index"])
+    if matches:
+        return int(matches[0]["index"])
+    usb_devices = [d for d in devices if "usb" in d["name"].casefold()]
+    if usb_devices:
+        return int(usb_devices[0]["index"])
+    return int(devices[0]["index"])
 
 
 class FrameConverter:

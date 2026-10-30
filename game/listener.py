@@ -50,14 +50,14 @@ class VoiceListener:
     def _on_state(self, state, command) -> None:
         S = self._State
         if state == S.COMMAND_LISTEN:
-            self._on_listening(True)                  # ouviu MAGNUS -> LED azul
+            self._on_listening(True, "command")          # ouviu MAGNUS -> LED azul + LCD escutando
         elif state == S.CONFIRMATION_LISTEN:
-            self._on_listening(False)
-            self._on_confirm(command)                 # speaker repete + LCD
-            self._stream.discard_pending()            # descarta o eco do speaker
-            self._on_listening(True)
+            self._on_listening(False, "")
+            self._on_confirm(command)                    # speaker repete lance + LCD
+            self._stream.discard_pending()               # descarta o eco do speaker
+            self._on_listening(True, "confirmation")     # LED azul volta a ligar + LCD aguarda yes/no
         elif state in (S.WAKE_WORD_LISTEN, S.EMIT, S.ERROR, S.IDLE):
-            self._on_listening(False)
+            self._on_listening(False, "")
 
     def listen(self) -> ListenResult:
         self._before_listen()
@@ -85,17 +85,17 @@ class TextListener:
         text = normalize(text)
         if not text.startswith("magnus"):
             return ListenResult(reason="Wake word not detected")
-        self._on_listening(True)
+        self._on_listening(True, "command")
         command, reason = parse(text[len("magnus"):], "en-US")
         checked = validate(command, reason)
         if not checked["valid"]:
-            self._on_listening(False)
+            self._on_listening(False, "")
             return ListenResult(command, reason=checked["reason"])
-        self._on_listening(False)
+        self._on_listening(False, "")
         self._on_confirm(command)
-        self._on_listening(True)
+        self._on_listening(True, "confirmation")
         answer = input("[voz] confirma? (yes/no): ")
-        self._on_listening(False)
+        self._on_listening(False, "")
         confirmed = parse_confirmation(answer, "en-US")
         if confirmed is True:
             return ListenResult(command, confirmed=True)

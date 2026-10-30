@@ -43,36 +43,54 @@ def move_info(board: chess.Board, move: chess.Move) -> dict:
     }
 
 
-def announce(board: chess.Board, move: chess.Move) -> tuple[str, tuple[str, str]]:
-    """Frase falada + 2 linhas de LCD ao EXECUTAR o lance.
-
-    MOVING [PIECE] [FROM] [TO]
-    CAPTURING [PIECE] [TO] AND MOVING [PIECE] [FROM] [TO]
-    """
+def announce(board: chess.Board, move: chess.Move) -> tuple[str, tuple[str, ...]]:
+    """Frase falada + 4 linhas de LCD ao EXECUTAR o lance."""
     i = move_info(board, move)
-    moving = f"moving {i['piece']} {spoken_square(i['from'])} {spoken_square(i['to'])}"
+    moving = f"moving {i['piece']} {spoken_square(i['from'])} to {spoken_square(i['to'])}"
     if i["captured"]:
-        speech = (f"capturing {i['captured']} {spoken_square(i['cap_square'])} and {moving}")
-        lcd = (f"CAPTURE {i['captured'].upper()}", f"{i['piece'].upper()} {i['from']}>{i['to']}")
+        speech = f"capturing {i['captured']} {spoken_square(i['cap_square'])} and {moving}"
+        lcd = (
+            "EXECUTING MOVE",
+            f"CAPTURE {i['captured'].upper()}",
+            f"{i['piece'].upper()} {i['from']} -> {i['to']}",
+            "GANTRY MOVING...",
+        )
     else:
         speech = moving
-        lcd = (f"MOVING {i['piece'].upper()}", f"{i['from']} > {i['to']}")
+        lcd = (
+            "EXECUTING MOVE",
+            f"{i['piece'].upper()} {i['from']} -> {i['to']}",
+            "GANTRY MOVING...",
+            "PLEASE WAIT",
+        )
     if i["promotion"]:
         speech += f" and promoting to {i['promotion']}"
-        lcd = (lcd[0], f"{i['from']}>{i['to']}={i['promotion'][:1].upper()}")
+        lcd = (
+            "PROMOTING PAWN",
+            f"{i['from']} -> {i['to']}={i['promotion'][:1].upper()}",
+            "GANTRY MOVING...",
+            "PLEASE WAIT",
+        )
     return speech, lcd
 
 
-def confirm_move(board: chess.Board, from_sq: str, to_sq: str) -> tuple[str, tuple[str, str]]:
-    """Frase falada + LCD para o jogador confirmar o lance (SIM/NAO)."""
+def confirm_move(board: chess.Board, from_sq: str, to_sq: str) -> tuple[str, tuple[str, ...]]:
+    """Frase falada + 4 linhas de LCD para o jogador confirmar o lance (SIM/NAO)."""
     piece = None
     try:
         piece = _piece_at(board, chess.parse_square(from_sq.lower()))
     except ValueError:
         pass
     what = f"{piece} " if piece else ""
-    speech = f"move {what}{spoken_square(from_sq)} {spoken_square(to_sq)}. Say yes or no."
-    return speech, ("CONFIRM MOVE?", f"{from_sq.upper()} > {to_sq.upper()}")
+    piece_str = piece.upper() if piece else "PIECE"
+    speech = f"move {what}{spoken_square(from_sq)} to {spoken_square(to_sq)}. Say yes or no."
+    lcd = (
+        "CONFIRM MOVE?",
+        f"{piece_str} {from_sq.upper()} -> {to_sq.upper()}",
+        "SAY: YES OR NO",
+        "",
+    )
+    return speech, lcd
 
 
 def game_result(board: chess.Board) -> tuple[str, tuple[str, str]]:

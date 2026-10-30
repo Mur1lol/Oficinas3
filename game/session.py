@@ -50,6 +50,7 @@ class VoiceChessGame:
         self._stockfish_path = stockfish_path or cfg.find_stockfish()
         self._engine: chess.engine.SimpleEngine | None = None
         self._gantry_connected = False
+        self._last_confirm_lines: tuple[str, ...] = ()
         self.listener = listener_factory(self._on_listening, self._on_confirm,
                                          self.speaker.wait_idle)
 
@@ -87,9 +88,23 @@ class VoiceChessGame:
     # Callbacks do listener
     # ------------------------------------------------------------------
 
-    def _on_listening(self, active: bool) -> None:
+    def _on_listening(self, active: bool, context: str = "") -> None:
         if active:
             self.leds.set(PLAYER, "blue")
+            if context == "command":
+                self.lcd.show(
+                    "=== VOICE CHESS ===",
+                    "OUVINDO COMANDO...",
+                    "DIGA SEU LANCE",
+                    "ex: Move E2 to E4",
+                )
+            elif context == "confirmation":
+                if self._last_confirm_lines:
+                    c0 = self._last_confirm_lines[0] if len(self._last_confirm_lines) > 0 else "CONFIRM MOVE?"
+                    c1 = self._last_confirm_lines[1] if len(self._last_confirm_lines) > 1 else ""
+                    self.lcd.show(c0, c1, "SAY: YES OR NO", "OUVINDO: YES / NO")
+                else:
+                    self.lcd.show("CONFIRM?", "SAY: YES OR NO", "OUVINDO: YES / NO", "")
         elif self.leds.state(PLAYER) == "blue":
             self.leds.off(PLAYER)
 
@@ -100,13 +115,17 @@ class VoiceChessGame:
                                                  command.from_square, command.to_square)
         elif isinstance(command, LevelCommand):
             speech = f"level {command.level}. Say yes or no."
-            lines = ("CONFIRM LEVEL?", f"LEVEL {command.level}")
+            lines = ("CONFIRM LEVEL?", f"LEVEL {command.level}", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "NEW_GAME":
-            speech, lines = "start new game. Say yes or no.", ("START NEW GAME?", "YES / NO")
+            speech = "start new game. Say yes or no."
+            lines = ("START NEW GAME?", "=== VOICE CHESS ===", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "RESIGN_GAME":
-            speech, lines = "resign game. Say yes or no.", ("RESIGN GAME?", "YES / NO")
+            speech = "resign game. Say yes or no."
+            lines = ("RESIGN GAME?", "BLACK WINS", "SAY: YES OR NO", "")
         else:
-            speech, lines = f"{command}. Say yes or no.", ("CONFIRM?", "YES / NO")
+            speech = f"{command}. Say yes or no."
+            lines = ("CONFIRM?", f"{command}", "SAY: YES OR NO", "")
+        self._last_confirm_lines = lines
         self.lcd.show(*lines)
         self.speaker.say(speech, wait=True)
 
@@ -116,18 +135,35 @@ class VoiceChessGame:
 
     def _idle(self) -> None:
         self.leds.off()
-        self.lcd.show("VOICE CHESS", "SAY MAGNUS NEW")
+        self.lcd.show(
+            "=== VOICE CHESS ===",
+            "SAY: MAGNUS",
+            "START NEW GAME",
+            "TO BEGIN PLAY",
+        )
         while True:
             result = self.listener.listen()
             if (result.confirmed and isinstance(result.command, ActionCommand)
                     and result.command.action == "NEW_GAME"):
                 return
+            if result.command and not result.confirmed:
+                self.lcd.show(
+                    "=== VOICE CHESS ===",
+                    "CANCELLED",
+                    "SAY: MAGNUS",
+                    "START NEW GAME",
+                )
 
     def _configure(self) -> bool:
-        """Escolhe a dificuldade por voz. False se o jogador desistir."""
-        self.lcd.show("CHOOSE LEVEL", "SAY MAGNUS LEVEL")
-        self.speaker.say("New game. Choose the difficulty. Say Magnus, level, "
-                         "and a number from one to eight.")
+        """Escolhe a dificuldade por voz. Pode dizer o nível ou apenas iniciar com o padrão."""
+        self.lcd.show(
+            "CHOOSE LEVEL",
+            f"DEFAULT: LEVEL {self.level}",
+            "SAY: MAGNUS LEVEL 1-8",
+            "OR MAGNUS START",
+        )
+        self.speaker.say(f"New game. Default difficulty is level {self.level}. "
+                         f"Say Magnus level, or say Magnus start.")
         while True:
             result = self.listener.listen()
             if not result.confirmed:
@@ -135,12 +171,16 @@ class VoiceChessGame:
             cmd = result.command
             if isinstance(cmd, LevelCommand):
                 self.level = cmd.level
-                self.lcd.show("LEVEL SELECTED", f"LEVEL {self.level}")
+                self.lcd.show("LEVEL SELECTED", f"LEVEL {self.level}", "STARTING...", "")
                 self.speaker.say(f"Level {self.level} selected.")
+                return True
+            if isinstance(cmd, ActionCommand) and cmd.action == "NEW_GAME":
+                self.lcd.show("LEVEL SELECTED", f"LEVEL {self.level}", "STARTING...", "")
+                self.speaker.say(f"Starting with level {self.level}.")
                 return True
             if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
                 return False
-            self.speaker.say("Please choose a level from one to eight.")
+            self.speaker.say("Please choose a level from one to eight, or say start.")
 
     def _connect_gantry(self) -> None:
         try:
@@ -209,8 +249,23 @@ class VoiceChessGame:
     def _player_move(self) -> chess.Move | None:
         """Espera MAGNUS MOVE [FROM] [TO] confirmado. None = jogador desistiu."""
         while True:
-            self.lcd.show("YOUR TURN", "SAY MAGNUS MOVE")
+            self.lcd.show(
+                "YOUR TURN (WHITE)",
+                "SAY: MAGNUS",
+                "THEN YOUR MOVE",
+                "(ex: Move E2 to E4)"
+            )
             result = self.listener.listen()
+            if result.command and not result.confirmed:
+                self.lcd.show(
+                    "MOVE CANCELLED",
+                    "YOUR TURN (WHITE)",
+                    "SAY: MAGNUS MOVE",
+                    "TRY AGAIN"
+                )
+                self.speaker.say("Move cancelled.", wait=False)
+                time.sleep(1.5)
+                continue
             if not result.confirmed:
                 continue
             cmd = result.command
@@ -243,7 +298,12 @@ class VoiceChessGame:
         return None
 
     def _invalid_move(self) -> None:
-        self.lcd.show("INVALID MOVE", "TRY AGAIN")
+        self.lcd.show(
+            "INVALID MOVE!",
+            "NOT LEGAL ON BOARD",
+            "TRY AGAIN",
+            "SAY: MAGNUS MOVE"
+        )
         self.speaker.say("Invalid move.", wait=False)
         self.leds.blink(PLAYER, "red", cfg.BLINK_ERROR_SECONDS)
         self.speaker.wait_idle()
