@@ -197,7 +197,7 @@ class VoiceChessGame:
 
     def _start_engine(self) -> None:
         if not self._stockfish_path:
-            raise GameAbort("Stockfish nao encontrado.")
+            raise GameAbort("Stockfish nao encontrado! No Linux/Raspberry Pi instale com: sudo apt install stockfish")
         self._engine = chess.engine.SimpleEngine.popen_uci(self._stockfish_path)
         skill, elo = cfg.SKILL_MAP[self.level]
         try:

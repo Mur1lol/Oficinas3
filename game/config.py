@@ -5,6 +5,7 @@ Constantes do jogo Jogador x Maquina.  AJUSTE os pinos e as medidas ao seu hardw
 """
 
 import shutil
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -87,8 +88,20 @@ ENGINE_THINK_SECONDS = 0.5
 
 
 def find_stockfish() -> str | None:
-    bundled = ROOT / "stockfish-windows-x86-64-universal" / "stockfish" / \
-        "stockfish-windows-x86-64-universal.exe"
-    if bundled.is_file():
-        return str(bundled)
+    if sys.platform.startswith("win"):
+        bundled = ROOT / "stockfish-windows-x86-64-universal" / "stockfish" / \
+            "stockfish-windows-x86-64-universal.exe"
+        if bundled.is_file():
+            return str(bundled)
+
+    # No Linux / Raspberry Pi: procura no PATH ou no diretorio padrao do Debian/Ubuntu
+    for candidate in [
+        shutil.which("stockfish"),
+        "/usr/games/stockfish",
+        "/usr/bin/stockfish",
+        "/usr/local/bin/stockfish",
+    ]:
+        if candidate and Path(candidate).is_file():
+            return str(candidate)
+
     return shutil.which("stockfish")
