@@ -172,15 +172,59 @@ class Speaker:
 
     def __init__(self, simulate: bool = False) -> None:
         self.simulated = simulate
+        self.backend = "simulado"
         self._q: queue.Queue = queue.Queue()
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
         self._ready.wait(timeout=10)
 
+    def _load_piper(self):
+        """Carrega a voz neural Piper; devolve funcao speak(text) ou None se indisponivel."""
+        model = cfg.TTS_PIPER_MODEL
+        if not model.is_file():
+            log.info("Modelo Piper ausente (%s) - usando pyttsx3.", model)
+            return None
+        try:
+            import os
+            import shutil
+            import subprocess
+            import tempfile
+            import wave
+
+            from piper import PiperVoice
+
+            voice = PiperVoice.load(str(model))
+            player = shutil.which("aplay")
+            if player is None:
+                raise RuntimeError("aplay nao encontrado (sudo apt install alsa-utils)")
+
+            def speak(text: str) -> None:
+                fd, path = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                try:
+                    with wave.open(path, "wb") as wav:
+                        if hasattr(voice, "synthesize_wav"):        # piper-tts >= 1.3
+                            voice.synthesize_wav(text, wav)
+                        else:                                       # piper-tts 1.2
+                            voice.synthesize(text, wav)
+                    subprocess.run([player, "-q", path], check=False)
+                finally:
+                    os.unlink(path)
+
+            return speak
+        except Exception as exc:                             # noqa: BLE001
+            log.warning("Piper indisponivel (%s) - usando pyttsx3.", exc)
+            return None
+
     def _worker(self) -> None:
         engine = None
+        piper_speak = None
         if not self.simulated:
+            piper_speak = self._load_piper()
+            if piper_speak is not None:
+                self.backend = "piper"
+        if not self.simulated and piper_speak is None:
             try:
                 import pyttsx3
                 engine = pyttsx3.init()
@@ -190,12 +234,11 @@ class Speaker:
                     if "en" in ident and ("english" in ident or "en-" in ident or "en_" in ident):
                         engine.setProperty("voice", v.id)
                         break
+                self.backend = "pyttsx3"
             except Exception as exc:                         # noqa: BLE001
                 log.warning("TTS indisponivel (%s) - usando simulacao.", exc)
                 engine = None
                 self.simulated = True
-        else:
-            engine = None
         self._ready.set()
 
         while True:
@@ -205,7 +248,9 @@ class Speaker:
                 return
             text, done = item
             try:
-                if engine is None:
+                if piper_speak is not None:
+                    piper_speak(text)
+                elif engine is None:
                     print(f"   [SPEAKER] \"{text}\"")
                 else:
                     engine.say(text)

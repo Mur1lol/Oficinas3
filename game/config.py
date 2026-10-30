@@ -61,8 +61,11 @@ LCD_COLS = 20
 LCD_ROWS = 4
 
 # ── Speaker (TTS offline em ingles) ──────────────────────────────────────────
-TTS_RATE = 150            # palavras por minuto
+TTS_RATE = 150            # palavras por minuto (apenas fallback pyttsx3/espeak)
 TTS_VOICE_HINT = "english"
+# Voz neural (Piper). Baixe com: uv run python baixar_voz.py
+# Se o modelo nao existir, cai para pyttsx3/espeak (voz robotica).
+TTS_PIPER_MODEL = ROOT / "voice" / "models" / "en_US-lessac-medium.onnx"
 
 # ── Voz ───────────────────────────────────────────────────────────────────────
 VOICE_CONFIG = ROOT / "voice.toml"

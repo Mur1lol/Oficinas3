@@ -113,7 +113,7 @@ def speaker(_args):
 
     print("\n[*] Iniciando teste do Speaker / TTS...")
     spk = Speaker()
-    print(f"    Sintetizador real: {not spk.simulated} (Taxa: {cfg.TTS_RATE} wpm)\n")
+    print(f"    Motor de voz: {spk.backend} (piper = voz neural; pyttsx3 = robotica)\n")
 
     frases = [
         "Welcome to Voice Chess.",

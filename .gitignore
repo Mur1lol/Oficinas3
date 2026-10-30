@@ -9,4 +9,5 @@ build/
 dist/
 voice/models/vosk-model-*/
 voice/models/*.onnx
+voice/models/*.onnx.json
 voice.local.toml
