@@ -117,7 +117,7 @@ def test_full_queue_closes_without_blocking(pa):
     assert time.monotonic() - start < 0.2
 
 
-@pytest.mark.parametrize("status,data", [(2, bytes(2880)), (0, b""), (0, b"a")])
+@pytest.mark.parametrize("status,data", [(0, b""), (0, b"a")])
 def test_status_and_malformed_frames_abort(pa, status, data):
     with AudioStream(Settings()) as audio:
         audio._callback(data, 1440, {}, status)

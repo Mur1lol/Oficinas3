@@ -122,8 +122,10 @@ class AudioStream:
 
         if not self._active:
             return None, pyaudio.paComplete
-        if status or not data or len(data) != frame_count * 2:
-            self._error = AudioError(f"Audio capture interrupted (status={status})")
+        # Buffer overflow/underflow (status & 1 or 2) e comum no Linux/RPi ao inicializar ou
+        # quando o speaker fala. Nao abortamos por overflow/underflow transitorio.
+        if not data or len(data) != frame_count * 2:
+            self._error = AudioError(f"Audio capture invalid data (len={len(data) if data else 0})")
             return None, pyaudio.paAbort
         # Map the device timestamp to monotonic time to discard pre-prompt audio.
         age = max(0.0, time_info.get("current_time", 0) - time_info.get("input_buffer_adc_time", 0))
@@ -131,8 +133,11 @@ class AudioStream:
             self._queue.put_nowait((time.monotonic() - age, data))
             self.received_frames += 1
         except queue.Full:
-            self._error = AudioError("Audio queue overflow; repeat the command")
-            return None, pyaudio.paAbort
+            try:
+                self._queue.get_nowait()
+                self._queue.put_nowait((time.monotonic() - age, data))
+            except Exception:
+                pass
         return None, pyaudio.paContinue
 
     def check(self):

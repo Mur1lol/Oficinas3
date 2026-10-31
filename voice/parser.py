@@ -22,7 +22,7 @@ class ActionCommand:
 
 @dataclass(frozen=True)
 class LevelCommand:
-    """Difficulty selection (1-8), e.g. "level four" / "nivel quatro"."""
+    """Difficulty selection (1-8), e.g. "level four"."""
 
     level: int
 
@@ -33,69 +33,61 @@ class LevelCommand:
 Command = MoveCommand | ActionCommand | LevelCommand
 
 DIGITS = dict(zip("one two three four five six seven eight".split(), "12345678", strict=True))
-DIGITS.update(zip("um dois tres quatro cinco seis sete oito".split(), "12345678", strict=True))
+
+# English letters and NATO phonetic alphabet
 COLUMNS = {
-    "alpha": "a",
-    "alfa": "a",
+    # Letters
+    "a": "a",
     "ay": "a",
-    "bravo": "b",
+    "b": "b",
     "bee": "b",
-    "be": "b",
-    "charlie": "c",
+    "c": "c",
     "see": "c",
-    "ce": "c",
-    "delta": "d",
+    "d": "d",
     "dee": "d",
-    "de": "d",
-    "echo": "e",
-    "eco": "e",
+    "e": "e",
     "ee": "e",
-    "foxtrot": "f",
-    "foxtrote": "f",
+    "f": "f",
     "eff": "f",
-    "golf": "g",
+    "g": "g",
     "gee": "g",
+    "h": "h",
+    # NATO phonetic alphabet
+    "alpha": "a",
+    "bravo": "b",
+    "charlie": "c",
+    "delta": "d",
+    "echo": "e",
+    "foxtrot": "f",
+    "golf": "g",
     "hotel": "h",
-    "aitch": "h",
-    "aga": "h",
 }
+
 ACTIONS = {
     "NEW_GAME": (
-        "play new game",
-        "new game",
-        "start game",
         "start new game",
+        "start game",
+        "new game",
+        "play new game",
         "start new",
         "start",
         "play",
-        "jogar novo jogo",
-        "novo jogo",
-        "iniciar jogo",
-        "comecar jogo",
-        "iniciar",
-        "comecar",
     ),
     "RESUME_GAME": (
         "resume game",
         "resume",
         "continue game",
-        "continuar jogo",
-        "retomar jogo",
-        "continuar",
-        "retomar",
+        "continue",
     ),
     "RESIGN_GAME": (
         "resign game",
         "resign",
         "surrender",
-        "desistir do jogo",
-        "desistir",
-        "abandonar jogo",
-        "abandonar",
     ),
 }
-MOVE_WORDS = {"move", "mova", "mover", "jogar", "mexe", "mexer"}
-LEVEL_WORDS = {"level", "difficulty", "nivel", "dificuldade"}
+
+MOVE_WORDS = {"move", "play"}
+LEVEL_WORDS = {"level", "difficulty"}
 FILLERS = {
     "from",
     "to",
@@ -103,17 +95,10 @@ FILLERS = {
     "at",
     "on",
     "square",
-    "de",
-    "para",
-    "pra",
-    "ao",
-    "casa",
-    "o",
-    "do",
-    "da",
 }
-YES = {"yes", "yeah", "yep", "confirm", "sim", "confirma", "confirmo", "positivo"}
-NO = {"no", "nope", "cancel", "nao", "cancela", "cancelar", "negativo"}
+
+YES = {"yes", "yeah", "yep", "confirm", "correct"}
+NO = {"no", "nope", "cancel", "negative"}
 
 
 def normalize(text: str) -> str:
@@ -161,13 +146,11 @@ def parse_confirmation(text: str | None, language: str | None = None) -> bool | 
     return None
 
 
-def grammar(stage: str, language: str) -> list[str]:
+def grammar(stage: str, language: str = "en-US") -> list[str]:
     if stage == "wake":
         return ["magnus", "[unk]"]
     if stage == "confirmation":
-        return sorted(YES | NO | {"não", "[unk]"})
+        return sorted(YES | NO | {"[unk]"})
     words = MOVE_WORDS | LEVEL_WORDS | FILLERS | set(DIGITS) | set(COLUMNS) | set("abcdefgh")
     words |= {word for phrases in ACTIONS.values() for phrase in phrases for word in phrase.split()}
-    if language == "pt-BR":
-        words |= {"três", "agá", "bê", "cê", "dê", "é", "começar"}
     return sorted(words | {"[unk]"})

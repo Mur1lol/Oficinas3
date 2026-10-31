@@ -42,15 +42,6 @@ MOVE_SUCCESS_CASES = [
     ("move h one eight four", "H1", "H4"),
     ("move eight two eight four", "H2", "H4"),
     ("move eight one eight eight", "H1", "H8"),
-    # Portuguese move commands
-    ("mova e2 e4", "E2", "E4"),
-    ("mover e dois e quatro", "E2", "E4"),
-    ("jogar g um f três", "G1", "F3"),
-    ("mova de a um para a dois", "A1", "A2"),
-    ("mover de agá um para agá quatro", "H1", "H4"),
-    ("mova de b um pra c três", "B1", "C3"),
-    ("mova echo dois echo quatro", "E2", "E4"),
-    ("jogar de e dois para e quatro", "E2", "E4"),
 ]
 
 
@@ -68,30 +59,22 @@ def test_parse_move_success(text, expected_from, expected_to):
 # ---------------------------------------------------------------------------
 
 ACTION_SUCCESS_CASES = [
-    # PLAY NEW GAME (EN & PT)
+    # PLAY NEW GAME (EN)
     ("play new game", "NEW_GAME"),
     ("new game", "NEW_GAME"),
     ("start game", "NEW_GAME"),
-    ("jogar novo jogo", "NEW_GAME"),
-    ("novo jogo", "NEW_GAME"),
-    ("iniciar jogo", "NEW_GAME"),
-    ("começar jogo", "NEW_GAME"),
-    # RESUME GAME (EN & PT)
+    ("start new game", "NEW_GAME"),
+    ("play", "NEW_GAME"),
+    ("start", "NEW_GAME"),
+    # RESUME GAME (EN)
     ("resume game", "RESUME_GAME"),
     ("resume", "RESUME_GAME"),
     ("continue game", "RESUME_GAME"),
-    ("continuar jogo", "RESUME_GAME"),
-    ("retomar jogo", "RESUME_GAME"),
-    ("continuar", "RESUME_GAME"),
-    ("retomar", "RESUME_GAME"),
-    # RESIGN GAME (EN & PT)
+    ("continue", "RESUME_GAME"),
+    # RESIGN GAME (EN)
     ("resign game", "RESIGN_GAME"),
     ("resign", "RESIGN_GAME"),
     ("surrender", "RESIGN_GAME"),
-    ("desistir do jogo", "RESIGN_GAME"),
-    ("abandonar jogo", "RESIGN_GAME"),
-    ("desistir", "RESIGN_GAME"),
-    ("abandonar", "RESIGN_GAME"),
 ]
 
 
@@ -104,7 +87,7 @@ def test_parse_action_success(text, expected_action):
 
 
 # ---------------------------------------------------------------------------
-# Confirmation Parsing Tests (YES / NO, SIM / NÃO)
+# Confirmation Parsing Tests (YES / NO)
 # ---------------------------------------------------------------------------
 
 CONFIRMATION_CASES = [
@@ -113,19 +96,12 @@ CONFIRMATION_CASES = [
     ("yeah", True),
     ("yep", True),
     ("confirm", True),
-    ("sim", True),
-    ("confirma", True),
-    ("confirmo", True),
-    ("positivo", True),
+    ("correct", True),
     # Negative
     ("no", False),
     ("nope", False),
     ("cancel", False),
-    ("não", False),
-    ("nao", False),
-    ("cancela", False),
-    ("cancelar", False),
-    ("negativo", False),
+    ("negative", False),
     # Inconclusive / Noise
     ("", None),
     ("banana", None),
@@ -148,7 +124,6 @@ FAILURE_CASES = [
     ("go e2 e4", "recognised command keyword"),
     ("", "empty"),
     ("move e2", "two chess squares"),
-    ("mova e2", "two chess squares"),
     ("move xyz abc", "two chess squares"),
     ("hello world", "recognised command keyword"),
 ]

@@ -199,15 +199,34 @@ class Speaker:
             if player is None:
                 raise RuntimeError("aplay nao encontrado (sudo apt install alsa-utils)")
 
+            length_scale = getattr(cfg, "TTS_PIPER_LENGTH_SCALE", 1.25)
+
+            def _synth(text: str, wav) -> None:
+                try:
+                    if hasattr(voice, "synthesize_wav"):
+                        voice.synthesize_wav(text, wav, length_scale=length_scale)
+                    else:
+                        voice.synthesize(text, wav, length_scale=length_scale)
+                except TypeError:
+                    try:
+                        from piper import SynthesisConfig
+                        syn_cfg = SynthesisConfig(length_scale=length_scale)
+                        if hasattr(voice, "synthesize_wav"):
+                            voice.synthesize_wav(text, wav, syn_config=syn_cfg)
+                        else:
+                            voice.synthesize(text, wav, syn_config=syn_cfg)
+                    except Exception:
+                        if hasattr(voice, "synthesize_wav"):
+                            voice.synthesize_wav(text, wav)
+                        else:
+                            voice.synthesize(text, wav)
+
             def speak(text: str) -> None:
                 fd, path = tempfile.mkstemp(suffix=".wav")
                 os.close(fd)
                 try:
                     with wave.open(path, "wb") as wav:
-                        if hasattr(voice, "synthesize_wav"):        # piper-tts >= 1.3
-                            voice.synthesize_wav(text, wav)
-                        else:                                       # piper-tts 1.2
-                            voice.synthesize(text, wav)
+                        _synth(text, wav)
                     subprocess.run([player, "-q", path], check=False)
                 finally:
                     os.unlink(path)
