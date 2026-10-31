@@ -151,9 +151,11 @@ class MovePlanner:
     # ── cemiterio ────────────────────────────────────────────────────────────
 
     def cem_slot_for(self, piece_type: int, captured_color: bool) -> tuple[int, int]:
-        white = (captured_color == chess.WHITE)
-        pawn_col = COL_CEM_DIR_PEAO if white else COL_CEM_ESQ_PEAO
-        majors = R_MAJOR_SLOTS if white else L_MAJOR_SLOTS
+        # Colunas 0 e 1 (cemiterio direito): pecas pretas
+        # Colunas 12 e 13 (cemiterio esquerdo): pecas brancas
+        black = (captured_color == chess.BLACK)
+        pawn_col = COL_CEM_DIR_PEAO if black else COL_CEM_ESQ_PEAO
+        majors = R_MAJOR_SLOTS if black else L_MAJOR_SLOTS
         grid = self.logic.grid
         if piece_type == chess.PAWN:
             for row in range(LOGIC_ROWS):
@@ -172,7 +174,8 @@ class MovePlanner:
         raise PlanningError("Cemiterio cheio.")
 
     def promotable_slot(self, piece_type: int, color: bool):
-        majors = R_MAJOR_SLOTS if color == chess.WHITE else L_MAJOR_SLOTS
+        # Brancas no cemiterio esquerdo (L_MAJOR_SLOTS), pretas no direito (R_MAJOR_SLOTS)
+        majors = L_MAJOR_SLOTS if color == chess.WHITE else R_MAJOR_SLOTS
         for pt, slot in majors:
             if pt == piece_type and self.cem_occ.get(slot) == piece_type:
                 return slot

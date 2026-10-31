@@ -4,17 +4,17 @@ board.py
 Representacao do tabuleiro de xadrez/damas para navegacao robotica.
 
 Layout logico (colunas):
-    [cemiterio_dir]  [corredor]  [tabuleiro 8x8 (H8:H1 ate A8:A1)]  [corredor]  [cemiterio_esq]
-    Col 0: Peoes      Col 2       Col 3 : H8:H1                      Col 11      Col 12: Nobres
-    Col 1: Nobres                 Col 4 : G8:G1                                  Col 13: Peoes
-                                  Col 5 : F8:F1
-                                  Col 6 : E8:E1
-                                  Col 7 : D8:D1
-                                  Col 8 : C8:C1
-                                  Col 9 : B8:B1
-                                  Col 10: A8:A1
+    [cemiterio_dir (PRETAS)]  [corredor 5cm]  [tabuleiro 8x8 (H8:H1 ate A8:A1)]  [corredor 5cm]  [cemiterio_esq (BRANCAS)]
+    Col 0: Peoes               Col 2           Col 3 : H8:H1                      Col 11          Col 12: Nobres
+    Col 1: Nobres                              Col 4 : G8:G1                                      Col 13: Peoes
+                                               Col 5 : F8:F1
+                                               Col 6 : E8:E1
+                                               Col 7 : D8:D1
+                                               Col 8 : C8:C1
+                                               Col 9 : B8:B1
+                                               Col 10: A8:A1
 
-Total logico : 14 colunas x 8 linhas (cada casa logica mede 5 cm x 5 cm)
+Total logico : 14 colunas x 8 linhas (cada casa/coluna mede 5 cm x 5 cm)
 
 Layout fisico com bordas internas (27 colunas x 15 linhas):
     - Cada celula fisica mede 2,5 cm x 2,5 cm (sem bordas externas).
