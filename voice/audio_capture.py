@@ -1,8 +1,57 @@
+import ctypes
+import os
 import queue
+import sys
 import time
 from collections import deque
+from contextlib import contextmanager
 
 from .config import FRAME_BYTES, FRAME_MS, SAMPLE_RATE, Settings
+
+_c_alsa_handler = None
+
+
+def suppress_alsa_handler():
+    """Silencia mensagens de erro/aviso da biblioteca ALSA (libasound) em nivel C."""
+    global _c_alsa_handler
+    if _c_alsa_handler is not None:
+        return
+    try:
+        ERROR_HANDLER_FUNC = ctypes.CFUNCTYPE(
+            None, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p
+        )
+
+        def _null_handler(filename, line, function, err, fmt):
+            pass
+
+        _c_alsa_handler = ERROR_HANDLER_FUNC(_null_handler)
+        for lib in ("libasound.so", "libasound.so.2"):
+            try:
+                asound = ctypes.cdll.LoadLibrary(lib)
+                asound.snd_lib_error_set_handler(_c_alsa_handler)
+                break
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+
+@contextmanager
+def suppress_c_stderr():
+    """Redireciona temporariamente o stderr do C (FD 2) para devnull durante varredura ALSA/JACK."""
+    try:
+        sys.stderr.flush()
+        old_stderr_fd = os.dup(2)
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull_fd, 2)
+        os.close(devnull_fd)
+        try:
+            yield
+        finally:
+            os.dup2(old_stderr_fd, 2)
+            os.close(old_stderr_fd)
+    except Exception:
+        yield
 
 
 class AudioError(RuntimeError):
@@ -12,15 +61,17 @@ class AudioError(RuntimeError):
 def list_audio_devices() -> list[dict]:
     import pyaudio
 
-    pa = pyaudio.PyAudio()
-    try:
-        return [
-            dict(pa.get_device_info_by_index(i))
-            for i in range(pa.get_device_count())
-            if pa.get_device_info_by_index(i)["maxInputChannels"] > 0
-        ]
-    finally:
-        pa.terminate()
+    suppress_alsa_handler()
+    with suppress_c_stderr():
+        pa = pyaudio.PyAudio()
+        try:
+            return [
+                dict(pa.get_device_info_by_index(i))
+                for i in range(pa.get_device_count())
+                if pa.get_device_info_by_index(i)["maxInputChannels"] > 0
+            ]
+        finally:
+            pa.terminate()
 
 
 def select_device(devices: list[dict], name: str) -> int:
@@ -86,31 +137,33 @@ class AudioStream:
             return
         self._error = None
         self._cutoff = 0.0
+        suppress_alsa_handler()
         try:
             self._converter = FrameConverter(self.settings.capture_rate)
-            self._pa = pyaudio.PyAudio()
-            devices = [
-                dict(self._pa.get_device_info_by_index(i))
-                for i in range(self._pa.get_device_count())
-                if self._pa.get_device_info_by_index(i)["maxInputChannels"] > 0
-            ]
-            index = select_device(devices, self.settings.device_name)
-            self._pa.is_format_supported(
-                self.settings.capture_rate,
-                input_device=index,
-                input_channels=1,
-                input_format=pyaudio.paInt16,
-            )
-            self._stream = self._pa.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.settings.capture_rate,
-                input=True,
-                input_device_index=index,
-                frames_per_buffer=self.settings.capture_rate * FRAME_MS // 1000,
-                stream_callback=self._callback,
-                start=False,
-            )
+            with suppress_c_stderr():
+                self._pa = pyaudio.PyAudio()
+                devices = [
+                    dict(self._pa.get_device_info_by_index(i))
+                    for i in range(self._pa.get_device_count())
+                    if self._pa.get_device_info_by_index(i)["maxInputChannels"] > 0
+                ]
+                index = select_device(devices, self.settings.device_name)
+                self._pa.is_format_supported(
+                    self.settings.capture_rate,
+                    input_device=index,
+                    input_channels=1,
+                    input_format=pyaudio.paInt16,
+                )
+                self._stream = self._pa.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=self.settings.capture_rate,
+                    input=True,
+                    input_device_index=index,
+                    frames_per_buffer=self.settings.capture_rate * FRAME_MS // 1000,
+                    stream_callback=self._callback,
+                    start=False,
+                )
             self._active = True
             self._stream.start_stream()
         except Exception as error:

@@ -9,6 +9,17 @@ Uso:
 
 import argparse
 import logging
+import warnings
+
+# Silencia avisos informativos (ex.: pkg_resources deprecation do webrtcvad)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*pkg_resources.*")
+
+try:
+    from voice.audio_capture import suppress_alsa_handler
+    suppress_alsa_handler()
+except Exception:
+    pass
 
 from . import config as cfg
 from .gantry_link import EspGantry, SimulatedGantry

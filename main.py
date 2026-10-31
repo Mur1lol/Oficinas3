@@ -7,6 +7,18 @@ Exemplos de uso:
 """
 
 import sys
+import warnings
+
+# Silencia avisos informativos (ex.: pkg_resources deprecation do webrtcvad)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*pkg_resources.*")
+
+try:
+    from voice.audio_capture import suppress_alsa_handler
+    suppress_alsa_handler()
+except Exception:
+    pass
+
 from game.__main__ import main
 
 if __name__ == "__main__":

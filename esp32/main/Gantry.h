@@ -22,8 +22,8 @@ class Gantry {
   static constexpr float CURSO_X     = 350.0f;  // Limite útil X em mm (0..350)
   static constexpr float CURSO_Y     = 650.0f;  // Limite útil Y em mm (0..650)
   static constexpr float V_INICIAL    = 5.0f;    // mm/s no início/fim da rampa
-  static constexpr float RECUO_HOME_X = 5.0f;    // Recuo pós-homing no eixo X (mm)
-  static constexpr float RECUO_HOME_Y = 10.0f;   // Recuo pós-homing no eixo Y (mm)
+  static constexpr float RECUO_HOME_X = 0.0f;    // Recuo pós-homing no eixo X (mm)
+  static constexpr float RECUO_HOME_Y = 0.0f;   // Recuo pós-homing no eixo Y (mm)
 
   Gantry(uint8_t aStep = 26, uint8_t aDir = 27,
          uint8_t bStep = 18, uint8_t bDir = 19,
