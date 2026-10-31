@@ -42,7 +42,8 @@ class VoiceListener:
         self._on_listening = on_listening
         self._on_confirm = on_confirm
         self._before_listen = before_listen
-        settings = load_settings(voice_config)
+        from pathlib import Path
+        settings = load_settings(Path(voice_config) if voice_config else None)
         self._pipeline = VoiceCommandPipeline(settings, on_state=self._on_state)
         self._ctx = AudioStream(settings)
         self._stream = self._ctx.__enter__()

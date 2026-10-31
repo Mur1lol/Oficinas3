@@ -51,8 +51,11 @@ class Settings:
         return self.model_dir / model
 
 
-def load_settings(path: Path | None = None) -> Settings:
-    path = path or Path(__file__).resolve().parent.parent / "voice.toml"
+def load_settings(path: Path | str | None = None) -> Settings:
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / "voice.toml"
+    else:
+        path = Path(path)
     with path.open("rb") as source:
         data = tomllib.load(source)
     if set(data) != {"voice"} or not isinstance(data["voice"], dict):
