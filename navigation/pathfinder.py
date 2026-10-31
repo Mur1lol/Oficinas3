@@ -193,6 +193,9 @@ def find_path_physical(
     came_from = {start: None}
     g_cost = {start: 0}
 
+    ADJACENT_PENALTY = 3.0
+    TURN_PENALTY = 1.0
+
     while heap:
         f, g, cur = heapq.heappop(heap)
         if cur == goal:
@@ -200,13 +203,18 @@ def find_path_physical(
         if g > g_cost.get(cur, float("inf")):
             continue
         cr, cc = cur
+        parent = came_from[cur]
+        prev_dir = (cr - parent[0], cc - parent[1]) if parent is not None else None
+
         for dr, dc in _DIRS:
             nxt = (cr + dr, cc + dc)
             nr, nc = nxt
             if not (0 <= nr < PHYS_ROWS and 0 <= nc < PHYS_COLS):
                 continue
+            turn_cost = TURN_PENALTY if (prev_dir is not None and (dr, dc) != prev_dir) else 0.0
+
             if nxt == goal:
-                new_g = g + 1
+                new_g = g + 1.0 + turn_cost
                 if new_g < g_cost.get(nxt, float("inf")):
                     g_cost[nxt] = new_g
                     came_from[nxt] = cur
@@ -214,7 +222,12 @@ def find_path_physical(
                 continue
             if not phys.is_passable(nr, nc):
                 continue
-            new_g = g + 1
+
+            step_cost = 1.0 + turn_cost
+            if getattr(phys, "piece_adjacent", None) and phys.piece_adjacent[nr][nc] and cur != start:
+                step_cost += ADJACENT_PENALTY
+
+            new_g = g + step_cost
             if new_g < g_cost.get(nxt, float("inf")):
                 g_cost[nxt] = new_g
                 came_from[nxt] = cur

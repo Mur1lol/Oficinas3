@@ -218,6 +218,7 @@ class BoardPhysical:
 
     def __init__(self, board_logic=None):
         self.grid = [[EMPTY] * PHYS_COLS for _ in range(PHYS_ROWS)]
+        self.piece_adjacent = [[False] * PHYS_COLS for _ in range(PHYS_ROWS)]
         if board_logic is not None:
             self.sync_from(board_logic)
 
@@ -229,6 +230,17 @@ class BoardPhysical:
                 pr, pc = r * 2, c * 2
                 is_gap = (c == COL_CORREDOR_DIR or c == COL_CORREDOR_ESQ)
                 self.grid[pr][pc] = EMPTY if is_gap else src[r][c]
+
+        # Mapeia celulas adjacentes a pecas para atribuir peso extra no pathfinding
+        self.piece_adjacent = [[False] * PHYS_COLS for _ in range(PHYS_ROWS)]
+        for pr in range(0, PHYS_ROWS, 2):
+            for pc in range(0, PHYS_COLS, 2):
+                if self.grid[pr][pc] == PIECE:
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            nr, nc = pr + dr, pc + dc
+                            if 0 <= nr < PHYS_ROWS and 0 <= nc < PHYS_COLS:
+                                self.piece_adjacent[nr][nc] = True
 
     def get(self, row: int, col: int) -> int:
         self._check(row, col)

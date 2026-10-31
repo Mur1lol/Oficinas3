@@ -155,10 +155,8 @@ class Comunication {
       delete[] posY;
       delete[] posIma;
 
-      if (res == MOV_OK) {
+      if (res == MOV_OK || res == MOV_BATEU_FIM_CURSO) {
         responderOk();
-      } else if (res == MOV_BATEU_FIM_CURSO) {
-        responderErro("fim de curso acionado durante o movimento");
       } else if (res == MOV_ERRO_SEM_HOME) {
         responderErro("faca o homing antes");
       } else if (res == MOV_ABORTADO) {

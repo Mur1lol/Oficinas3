@@ -137,6 +137,10 @@ class Gantry {
                 : ((fx && dx < 0) || (fy && dy < 0));
       contaFim = bate ? (contaFim + 1) : 0;
       if (contaFim >= 3) {
+        if (!procurar) {
+          if (fx && dx < 0) definirPosicao(0.0f, posY());
+          if (fy && dy < 0) definirPosicao(posX(), 0.0f);
+        }
         r = MOV_BATEU_FIM_CURSO;
         break;
       }
@@ -213,7 +217,7 @@ class Gantry {
 
       // Desloca para a posição do passo
       ResultadoMovimento res = irPara(x[i], y[i]);
-      if (res != MOV_OK) {
+      if (res != MOV_OK && res != MOV_BATEU_FIM_CURSO) {
         eletroima_.desligar();
         return res;
       }
