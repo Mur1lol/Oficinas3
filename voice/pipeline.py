@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum, auto
 
 from loguru import logger
@@ -25,6 +25,7 @@ class VoiceResult:
     command: Command | None = None
     confirmed: bool = False
     reason: str | None = None
+    wake_detected: bool = field(default=False, compare=False)
 
     def to_dict(self):
         result = validate(self.command, self.reason)
@@ -75,18 +76,18 @@ class VoiceCommandPipeline:
         if self.wake is not None:
             self.wake.wait(stream)
         elif self.recognizer.listen(stream, "wake", None) is None:
-            return self._failure(None, "Wake word not detected")
+            return self._failure(None, "Wake word not detected", wake_detected=False)
         stream.discard_pending()
         self._set_state(PipelineState.COMMAND_LISTEN)
         text = self.recognizer.listen(stream, "command", self.settings.command_timeout)
         if not text:
-            return self._failure(None, "Command timed out")
+            return self._failure(None, "Command timed out", wake_detected=True)
         self._set_state(PipelineState.PARSE)
         command, reason = parse(text, self.settings.language)
         self._set_state(PipelineState.VALIDATE, command)
         checked = validate(command, reason)
         if not checked["valid"]:
-            return self._failure(command, checked["reason"])
+            return self._failure(command, checked["reason"], wake_detected=True)
         stream.discard_pending()
         self._set_state(PipelineState.CONFIRMATION_LISTEN, command)
         answer = self.recognizer.listen(stream, "confirmation", self.settings.confirmation_timeout)
@@ -95,11 +96,11 @@ class VoiceCommandPipeline:
             reason = (
                 "Command cancelled" if confirmed is False else "Confirmation missing or ambiguous"
             )
-            return self._failure(command, reason)
+            return self._failure(command, reason, wake_detected=True)
         stream.check()
         self._set_state(PipelineState.EMIT, command)
-        return VoiceResult(command, confirmed=True)
+        return VoiceResult(command, confirmed=True, wake_detected=True)
 
-    def _failure(self, command, reason):
+    def _failure(self, command, reason, wake_detected=False):
         self._set_state(PipelineState.ERROR, command)
-        return VoiceResult(command, reason=reason)
+        return VoiceResult(command, reason=reason, wake_detected=wake_detected)

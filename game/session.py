@@ -94,19 +94,31 @@ class VoiceChessGame:
             if context == "command":
                 self.lcd.show(
                     "=== VOICE CHESS ===",
-                    "OUVINDO COMANDO...",
-                    "DIGA SEU LANCE",
+                    "LISTENING...",
+                    "SPEAK YOUR MOVE",
                     "ex: Move E2 to E4",
                 )
             elif context == "confirmation":
                 if self._last_confirm_lines:
                     c0 = self._last_confirm_lines[0] if len(self._last_confirm_lines) > 0 else "CONFIRM MOVE?"
                     c1 = self._last_confirm_lines[1] if len(self._last_confirm_lines) > 1 else ""
-                    self.lcd.show(c0, c1, "SAY: YES OR NO", "OUVINDO: YES / NO")
+                    self.lcd.show(c0, c1, "SAY: YES OR NO", "LISTENING: YES/NO")
                 else:
-                    self.lcd.show("CONFIRM?", "SAY: YES OR NO", "OUVINDO: YES / NO", "")
+                    self.lcd.show("CONFIRM?", "SAY: YES OR NO", "LISTENING: YES/NO", "")
         elif self.leds.state(PLAYER) == "blue":
             self.leds.off(PLAYER)
+
+    def _command_not_recognized(self) -> None:
+        """Chamado quando escuta a wake word mas nao reconhece o comando."""
+        self.lcd.show(
+            "NOT RECOGNIZED",
+            "PLEASE TRY AGAIN",
+            "SAY: MAGNUS",
+            "THEN YOUR COMMAND",
+        )
+        self.leds.set(PLAYER, "red")
+        self.speaker.say("Command not recognized. Please try again.", wait=True)
+        self.leds.off(PLAYER)
 
     def _on_confirm(self, command) -> None:
         """Speaker repete o comando e o LCD o mostra, enquanto espera SIM/NAO."""
@@ -158,6 +170,15 @@ class VoiceChessGame:
                     "SAY: MAGNUS",
                     "START NEW GAME",
                 )
+                self.speaker.say("Cancelled.", wait=True)
+            elif result.wake_detected and not result.command:
+                self._command_not_recognized()
+                self.lcd.show(
+                    "=== VOICE CHESS ===",
+                    "SAY: MAGNUS",
+                    "START NEW GAME",
+                    "TO BEGIN PLAY",
+                )
 
     def _configure(self) -> bool:
         """Escolhe a dificuldade por voz. Pode dizer o nível ou apenas iniciar com o padrão."""
@@ -171,6 +192,24 @@ class VoiceChessGame:
                          f"Say Magnus level, or say Magnus start.")
         while True:
             result = self.listener.listen()
+            if result.command and not result.confirmed:
+                self.lcd.show(
+                    "CHOOSE LEVEL",
+                    "CANCELLED",
+                    "SAY: MAGNUS LEVEL",
+                    "OR MAGNUS START",
+                )
+                self.speaker.say("Cancelled.", wait=True)
+                continue
+            if result.wake_detected and not result.command:
+                self._command_not_recognized()
+                self.lcd.show(
+                    "CHOOSE LEVEL",
+                    f"DEFAULT: LEVEL {self.level}",
+                    "SAY: MAGNUS LEVEL 1-8",
+                    "OR MAGNUS START",
+                )
+                continue
             if not result.confirmed:
                 continue
             cmd = result.command
@@ -266,10 +305,13 @@ class VoiceChessGame:
                     "MOVE CANCELLED",
                     "YOUR TURN (WHITE)",
                     "SAY: MAGNUS MOVE",
-                    "TRY AGAIN"
+                    "TRY AGAIN",
                 )
                 self.speaker.say("Move cancelled.", wait=False)
                 time.sleep(1.5)
+                continue
+            if result.wake_detected and not result.command:
+                self._command_not_recognized()
                 continue
             if not result.confirmed:
                 continue
@@ -277,6 +319,7 @@ class VoiceChessGame:
             if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
                 return None
             if not isinstance(cmd, MoveCommand):
+                self._command_not_recognized()
                 continue
             move = self._resolve_move(cmd)
             if move is None:

@@ -16,7 +16,7 @@ Callbacks fornecidos pelo jogo:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from voice.parser import normalize, parse, parse_confirmation
@@ -28,6 +28,7 @@ class ListenResult:
     command: object | None = None      # MoveCommand | ActionCommand | LevelCommand
     confirmed: bool = False
     reason: str | None = None
+    wake_detected: bool = field(default=False, compare=False)
 
 
 class VoiceListener:
@@ -63,7 +64,7 @@ class VoiceListener:
     def listen(self) -> ListenResult:
         self._before_listen()
         result = self._pipeline.listen_once(self._stream)
-        return ListenResult(result.command, result.confirmed, result.reason)
+        return ListenResult(result.command, result.confirmed, result.reason, result.wake_detected)
 
     def close(self) -> None:
         self._ctx.__exit__(None, None, None)
@@ -85,13 +86,13 @@ class TextListener:
             raise KeyboardInterrupt
         text = normalize(text)
         if not text.startswith("magnus"):
-            return ListenResult(reason="Wake word not detected")
+            return ListenResult(reason="Wake word not detected", wake_detected=False)
         self._on_listening(True, "command")
         command, reason = parse(text[len("magnus"):], "en-US")
         checked = validate(command, reason)
         if not checked["valid"]:
             self._on_listening(False, "")
-            return ListenResult(command, reason=checked["reason"])
+            return ListenResult(command, reason=checked["reason"], wake_detected=True)
         self._on_listening(False, "")
         self._on_confirm(command)
         self._on_listening(True, "confirmation")
@@ -99,9 +100,9 @@ class TextListener:
         self._on_listening(False, "")
         confirmed = parse_confirmation(answer, "en-US")
         if confirmed is True:
-            return ListenResult(command, confirmed=True)
+            return ListenResult(command, confirmed=True, wake_detected=True)
         return ListenResult(command, reason="Command cancelled" if confirmed is False
-                            else "Confirmation missing or ambiguous")
+                            else "Confirmation missing or ambiguous", wake_detected=True)
 
     def close(self) -> None:
         pass

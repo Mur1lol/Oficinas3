@@ -142,3 +142,20 @@ def test_ambiguous_command(text):
 
 def test_unconfirmed_result_is_not_executable():
     assert not VoiceResult(MoveCommand("E2", "E4")).to_dict()["valid"]
+
+
+def test_wake_detected_flag_on_command_failure():
+    engine = Recognizer("magnus", "unknown command gibberish")
+    pipeline = VoiceCommandPipeline(Settings(), recognizer=engine)
+    result = pipeline.listen_once(Stream())
+    assert result.wake_detected is True
+    assert result.command is None
+    assert result.confirmed is False
+
+
+def test_wake_detected_false_when_no_wake():
+    engine = Recognizer(None)
+    pipeline = VoiceCommandPipeline(Settings(), recognizer=engine)
+    result = pipeline.listen_once(Stream())
+    assert result.wake_detected is False
+    assert result.command is None
