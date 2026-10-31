@@ -4,59 +4,52 @@ board.py
 Representacao do tabuleiro de xadrez/damas para navegacao robotica.
 
 Layout logico (colunas):
-    [cemiterio_esq 3x8] [tabuleiro 8x8] [cemiterio_dir 3x8]
-    cols logicas: 0..2        3..10             11..13
+    [cemiterio_dir]  [corredor]  [tabuleiro 8x8 (H8:H1 ate A8:A1)]  [corredor]  [cemiterio_esq]
+    Col 0: Peoes      Col 2       Col 3 : H8:H1                      Col 11      Col 12: Nobres
+    Col 1: Nobres                 Col 4 : G8:G1                                  Col 13: Peoes
+                                  Col 5 : F8:F1
+                                  Col 6 : E8:E1
+                                  Col 7 : D8:D1
+                                  Col 8 : C8:C1
+                                  Col 9 : B8:B1
+                                  Col 10: A8:A1
 
-Total logico : 14 colunas x 8 linhas
+Total logico : 14 colunas x 8 linhas (cada casa logica mede 5 cm x 5 cm)
 
 Layout fisico com bordas internas (27 colunas x 15 linhas):
-    - Cada casa logica (row, col) fica na posicao fisica (row * 2, col * 2).
-    - As bordas/corredores internos entre casas adjacentes ficam nas celulas
-      com indices impares (row % 2 != 0 ou col % 2 != 0).
+    - Cada celula fisica mede 2,5 cm x 2,5 cm (sem bordas externas).
+    - O ponto (0, 0) fica exatamente no canto superior direito (Direita em cima).
+    - Casa logica (row, col) fica na posicao fisica (row * 2, col * 2).
+    - As bordas/corredores internos entre casas ficam nas celulas com indices
+      impares (row % 2 != 0 ou col % 2 != 0).
+    - As colunas 2 e 11 sao corredores livres de navegacao (pc = 4 e pc = 22).
     - Total de colunas fisicas: 14 casas + 13 bordas internas = 27 colunas (0..26).
     - Total de linhas fisicas : 8 casas + 7 bordas internas = 15 linhas (0..14).
-
-Zonas no grid logico (por col):
-    COL_CEM_ESQ  = 0..2   -> cemiterio das pecas do jogador esquerdo
-    COL_BOARD    = 3..10  -> tabuleiro de jogo 8x8 (a..h)
-    COL_CEM_DIR  = 11..13 -> cemiterio das pecas do jogador direito
-
-Mapeamento de coordenadas
--------------------------
-  Casa logica  (row, col)   ->  celula fisica  (row * 2, col * 2)
-  Borda interna adjacente   ->  celula fisica com row ou col impar.
-
-Convencao de eixos
-------------------
-  row  ->  eixo Y logico / X do ESP32 (0 = topo/computer/Pretas, 7 = base/player/Brancas)
-  col  ->  eixo X logico / Y do ESP32 (0 = esquerda/cem_esq, 13 = direita/cem_dir)
-  Home fisico (0, 0) do ESP32 = canto superior direito (row 0, col 13 -> phys 0, 26).
+    - Curso fisico maximo: 14 passos * 25 mm = 350 mm em X (linhas).
+                           26 passos * 25 mm = 650 mm em Y (colunas).
 """
 
 # ─── Dimensoes ────────────────────────────────────────────────────────────────
 
-BOARD_ROWS   = 8    # linhas do tabuleiro de jogo
-BOARD_COLS   = 8    # colunas do tabuleiro de jogo
+BOARD_ROWS   = 8    # linhas do tabuleiro de jogo (Row 0 = Rank 8, Row 7 = Rank 1)
+BOARD_COLS   = 8    # colunas do tabuleiro de jogo (Col 3 = H, Col 10 = A)
 
-CEM_COLS     = 3    # colunas de cemiterio em cada lado (esquerdo e direito)
+LOGIC_COLS   = 14   # 14 colunas no total (0..13)
+LOGIC_ROWS   = 8    # 8 linhas no total (0..7)
 
-# Layout logico total: 3 + 8 + 3 = 14 colunas x 8 linhas
-LOGIC_COLS   = CEM_COLS + BOARD_COLS + CEM_COLS  # = 14
-LOGIC_ROWS   = BOARD_ROWS                        # = 8
+# Layout fisico sem borda externa (cada celula 2,5 cm x 2,5 cm):
+PHYS_COLS    = LOGIC_COLS * 2 - 1  # 27 colunas (indices 0..26)
+PHYS_ROWS    = LOGIC_ROWS * 2 - 1  # 15 linhas (indices 0..14)
 
-# Layout fisico considerando as bordas internas entre casas:
-# 14 casas + 13 bordas internas = 27 colunas (indices 0..26)
-# 8 casas + 7 bordas internas = 15 linhas (indices 0..14)
-PHYS_COLS    = LOGIC_COLS * 2 - 1                # = 27
-PHYS_ROWS    = LOGIC_ROWS * 2 - 1                # = 15
-
-# Offsets de coluna no espaco logico
-COL_CEM_ESQ_START  = 0
-COL_CEM_ESQ_END    = CEM_COLS - 1                           # 2 (cols 0, 1, 2)
-COL_BOARD_START    = CEM_COLS                               # 3
-COL_BOARD_END      = CEM_COLS + BOARD_COLS - 1             # 10 (cols 3..10)
-COL_CEM_DIR_START  = CEM_COLS + BOARD_COLS                  # 11
-COL_CEM_DIR_END    = LOGIC_COLS - 1                         # 13 (cols 11..13)
+# Definicao das colunas no espaco logico:
+COL_CEM_DIR_PEAO   = 0   # peoes cemiterio direito
+COL_CEM_DIR_NOBRE  = 1   # nobres cemiterio direito
+COL_CORREDOR_DIR   = 2   # corredor livre direito
+COL_BOARD_START    = 3   # H8..H1 (file H = index 7)
+COL_BOARD_END      = 10  # A8..A1 (file A = index 0)
+COL_CORREDOR_ESQ   = 11  # corredor livre esquerdo
+COL_CEM_ESQ_NOBRE  = 12  # nobres cemiterio esquerdo
+COL_CEM_ESQ_PEAO   = 13  # peoes cemiterio esquerdo
 
 # Valores de celula
 EMPTY  = 0
@@ -65,19 +58,21 @@ PIECE  = 1
 # ─── Tipos de zona ────────────────────────────────────────────────────────────
 
 ZONE_BOARD   = "board"
-ZONE_CEM_ESQ = "cemetery_left"
 ZONE_CEM_DIR = "cemetery_right"
-ZONE_VAO     = "gap"  # mantido para compatibilidade retroativa
+ZONE_CEM_ESQ = "cemetery_left"
+ZONE_VAO     = "gap"
 
 
 def zone_of(col: int) -> str:
     """Retorna a zona logica de uma coluna."""
-    if COL_CEM_ESQ_START <= col <= COL_CEM_ESQ_END:
-        return ZONE_CEM_ESQ
+    if col in (COL_CEM_DIR_PEAO, COL_CEM_DIR_NOBRE):
+        return ZONE_CEM_DIR
+    if col in (COL_CORREDOR_DIR, COL_CORREDOR_ESQ):
+        return ZONE_VAO
     if COL_BOARD_START <= col <= COL_BOARD_END:
         return ZONE_BOARD
-    if COL_CEM_DIR_START <= col <= COL_CEM_DIR_END:
-        return ZONE_CEM_DIR
+    if col in (COL_CEM_ESQ_NOBRE, COL_CEM_ESQ_PEAO):
+        return ZONE_CEM_ESQ
     raise ValueError(f"Coluna logica {col} fora do range [0, {LOGIC_COLS - 1}].")
 
 
@@ -86,11 +81,6 @@ def zone_of(col: int) -> str:
 class BoardLogic:
     """
     Tabuleiro logico completo (14 colunas x 8 linhas).
-
-    Inclui:
-        - Cemiterio esquerdo 3x8 (cols 0..2)
-        - Tabuleiro de jogo  8x8 (cols 3..10)
-        - Cemiterio direito  3x8 (cols 11..13)
     """
 
     def __init__(self):
@@ -104,6 +94,8 @@ class BoardLogic:
 
     def set(self, row: int, col: int, value: int):
         self._check(row, col)
+        if self.is_gap(col):
+            raise ValueError(f"Coluna {col} e um corredor e nao pode conter pecas fixas.")
         self.grid[row][col] = value
 
     def place_piece(self, row: int, col: int):
@@ -118,55 +110,52 @@ class BoardLogic:
     # ── Consultas de zona ──
 
     def is_gap(self, col: int) -> bool:
-        """Mantido para compatibilidade. No grid 14x8 nao ha colunas extras de vao."""
-        return False
+        """True se a coluna for um corredor de navegacao (cols 2 e 11)."""
+        return col == COL_CORREDOR_DIR or col == COL_CORREDOR_ESQ
 
     def is_board(self, row: int, col: int) -> bool:
         return COL_BOARD_START <= col <= COL_BOARD_END
 
     def is_cemetery(self, row: int, col: int) -> bool:
-        return (COL_CEM_ESQ_START <= col <= COL_CEM_ESQ_END or
-                COL_CEM_DIR_START <= col <= COL_CEM_DIR_END)
+        return col in (COL_CEM_DIR_PEAO, COL_CEM_DIR_NOBRE,
+                       COL_CEM_ESQ_NOBRE, COL_CEM_ESQ_PEAO)
 
     def zone(self, col: int) -> str:
         return zone_of(col)
 
-    # ── Coordenadas do tabuleiro de jogo ──
+    # ── Coordenadas do tabuleiro de jogo (File A..H <-> Colunas 10..3) ──
 
     def board_to_logical(self, board_row: int, board_col: int) -> tuple[int, int]:
-        """Converte coord do sub-tabuleiro 8x8 (0..7, 0..7) -> coord logica global."""
+        """
+        Converte coord do sub-tabuleiro 8x8 -> coord logica global.
+        board_col: 0 (file A) a 7 (file H).
+        board_row: 0 (rank 8) a 7 (rank 1).
+        """
         if not (0 <= board_row < BOARD_ROWS and 0 <= board_col < BOARD_COLS):
             raise IndexError(f"Coord do tabuleiro ({board_row}, {board_col}) fora de 8x8.")
-        return board_row, COL_BOARD_START + board_col
+        return board_row, 10 - board_col
 
     def logical_to_board(self, row: int, col: int) -> tuple[int, int]:
-        """Converte coord logica global -> coord do sub-tabuleiro 8x8."""
+        """Converte coord logica global -> coord do sub-tabuleiro 8x8 (row, file)."""
         if not self.is_board(row, col):
             raise ValueError(f"Coord ({row}, {col}) nao pertence ao tabuleiro de jogo.")
-        return row, col - COL_BOARD_START
+        return row, 10 - col
 
     # ── Coordenadas do cemiterio ──
 
     def next_cemetery_slot(self, side: str) -> tuple[int, int] | None:
         """
         Retorna a proxima posicao livre no cemiterio do lado indicado.
-
-        Parameters
-        ----------
-        side : 'left' ou 'right'
-
-        Returns
-        -------
-        (row, col) logico da proxima vaga livre, ou None se cemiterio cheio.
+        side: 'right' (cols 0, 1) ou 'left' (cols 12, 13).
         """
-        if side == "left":
-            col_range = range(COL_CEM_ESQ_START, COL_CEM_ESQ_END + 1)
-        elif side == "right":
-            col_range = range(COL_CEM_DIR_START, COL_CEM_DIR_END + 1)
+        if side == "right":
+            cols = (COL_CEM_DIR_PEAO, COL_CEM_DIR_NOBRE)
+        elif side == "left":
+            cols = (COL_CEM_ESQ_PEAO, COL_CEM_ESQ_NOBRE)
         else:
             raise ValueError(f"Side deve ser 'left' ou 'right', nao '{side}'.")
 
-        for col in col_range:
+        for col in cols:
             for row in range(LOGIC_ROWS):
                 if self.grid[row][col] == EMPTY:
                     return (row, col)
@@ -175,7 +164,7 @@ class BoardLogic:
     # ── Mapeamento para o espaco fisico ──
 
     def to_physical(self, row: int, col: int) -> tuple[int, int]:
-        """Converte coordenada logica -> coordenada fisica no grid PHYS_ROWS x PHYS_COLS (15x27)."""
+        """Converte coordenada logica -> coordenada fisica no grid 15x27."""
         self._check(row, col)
         return row * 2, col * 2
 
@@ -192,10 +181,12 @@ class BoardLogic:
         zone_row = "zona "
         for c in range(LOGIC_COLS):
             z = zone_of(c)
-            if z == ZONE_CEM_ESQ:
-                zone_row += " CE"
-            elif z == ZONE_CEM_DIR:
+            if z == ZONE_CEM_DIR:
                 zone_row += " CD"
+            elif z == ZONE_CEM_ESQ:
+                zone_row += " CE"
+            elif z == ZONE_VAO:
+                zone_row += " ||"
             else:
                 zone_row += " T "
         print(zone_row)
@@ -203,7 +194,9 @@ class BoardLogic:
         for r in range(LOGIC_ROWS):
             row_str = f"{r:2d}  |"
             for c in range(LOGIC_COLS):
-                if self.grid[r][c] == PIECE:
+                if self.is_gap(c):
+                    row_str += " | "
+                elif self.grid[r][c] == PIECE:
                     row_str += " P "
                 else:
                     row_str += " . "
@@ -220,6 +213,7 @@ class BoardPhysical:
     Mapeamento:
         posicoes com row % 2 == 0 e col % 2 == 0  ->  casas reais (logicas)
         demais posicoes                           ->  bordas/corredores internos
+        colunas fisicas 4 e 22 (cols logicas 2 e 11) -> corredores livres
     """
 
     def __init__(self, board_logic=None):
@@ -233,7 +227,8 @@ class BoardPhysical:
         for r in range(LOGIC_ROWS):
             for c in range(LOGIC_COLS):
                 pr, pc = r * 2, c * 2
-                self.grid[pr][pc] = src[r][c]
+                is_gap = (c == COL_CORREDOR_DIR or c == COL_CORREDOR_ESQ)
+                self.grid[pr][pc] = EMPTY if is_gap else src[r][c]
 
     def get(self, row: int, col: int) -> int:
         self._check(row, col)
@@ -244,15 +239,18 @@ class BoardPhysical:
         return (row % 2 == 0) and (col % 2 == 0)
 
     def is_corridor(self, row: int, col: int) -> bool:
-        """True se a celula e uma borda interna transitavel."""
-        return not self.is_real_cell(row, col)
+        """True se a celula e uma borda interna ou corredor transitavel."""
+        if not self.is_real_cell(row, col):
+            return True
+        # As colunas logicas 2 e 11 (fisicas 4 e 22) sao corredores livres
+        return col == (COL_CORREDOR_DIR * 2) or col == (COL_CORREDOR_ESQ * 2)
 
     def is_passable(self, row: int, col: int) -> bool:
         """True se o robo pode passar por essa celula."""
         if not (0 <= row < PHYS_ROWS and 0 <= col < PHYS_COLS):
             return False
         if self.is_corridor(row, col):
-            return True   # bordas internas sao sempre livres
+            return True   # corredores sao sempre livres
         return self.grid[row][col] == EMPTY  # casa real: apenas se vazia
 
     def _check(self, row: int, col: int):
@@ -261,17 +259,10 @@ class BoardPhysical:
                              f"{PHYS_ROWS}x{PHYS_COLS}.")
 
     def display(self, path=None):
-        """
-        Imprime o tabuleiro fisico 15x27.
-
-        Parameters
-        ----------
-        path : list of (row, col) | None
-            Se fornecido, marca as celulas do caminho com '*'.
-        """
+        """Imprime o tabuleiro fisico 15x27."""
         path_set = set(path) if path else set()
         print(f"Tabuleiro fisico {PHYS_ROWS}x{PHYS_COLS}")
-        print("  H=casa vazia  P=peca  .=borda interna  *=caminho")
+        print("  H=casa vazia  P=peca  .=borda/corredor  *=caminho")
         header = "    " + " ".join(f"{c:2d}" for c in range(PHYS_COLS))
         print(header)
         for r in range(PHYS_ROWS):
@@ -279,7 +270,7 @@ class BoardPhysical:
             for c in range(PHYS_COLS):
                 if (r, c) in path_set:
                     parts.append(" *")
-                elif self.is_real_cell(r, c):
+                elif self.is_real_cell(r, c) and not self.is_corridor(r, c):
                     parts.append(" P" if self.grid[r][c] == PIECE else " H")
                 else:
                     parts.append(" .")
@@ -297,7 +288,7 @@ class Board8x8(BoardLogic):
     def _b2l(self, row: int, col: int) -> tuple[int, int]:
         if not (0 <= row < BOARD_ROWS and 0 <= col < BOARD_COLS):
             raise IndexError(f"Coordenada ({row}, {col}) fora do tabuleiro 8x8.")
-        return row, COL_BOARD_START + col
+        return row, 10 - col
 
     def get(self, row: int, col: int) -> int:
         lr, lc = self._b2l(row, col)
@@ -334,9 +325,8 @@ class Board17x17(BoardPhysical):
             self.sync_from(board8)
 
     def is_house(self, row: int, col: int) -> bool:
-        return self.is_real_cell(row, col)
+        return self.is_real_cell(row, col) and not self.is_corridor(row, col)
 
 
-# Constantes legadas
 BOARD_SIZE = BOARD_ROWS   # = 8
 PHYS_SIZE  = PHYS_ROWS    # = 15

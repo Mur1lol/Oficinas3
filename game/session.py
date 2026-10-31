@@ -141,6 +141,11 @@ class VoiceChessGame:
             "START NEW GAME",
             "TO BEGIN PLAY",
         )
+        self.speaker.say(
+            "Welcome to Voice Chess. You can start a new game by using the wake word Magnus, "
+            "followed by the command Start New Game.",
+            wait=True,
+        )
         while True:
             result = self.listener.listen()
             if (result.confirmed and isinstance(result.command, ActionCommand)

@@ -33,19 +33,27 @@ from . import config as cfg
 
 sys.path.insert(0, str(cfg.ROOT / "navigation"))
 from board import (BoardLogic, PIECE, EMPTY, LOGIC_ROWS, PHYS_ROWS, PHYS_COLS,  # noqa: E402
-                   COL_BOARD_START, COL_CEM_ESQ_START, COL_CEM_ESQ_END,
-                   COL_CEM_DIR_START, COL_CEM_DIR_END)
+                   COL_BOARD_START, COL_BOARD_END, COL_CEM_DIR_PEAO, COL_CEM_DIR_NOBRE,
+                   COL_CEM_ESQ_NOBRE, COL_CEM_ESQ_PEAO)
 from pathfinder import find_path_logical, find_path_physical                     # noqa: E402
 
-# ── Layout fixo do cemiterio (mesmo de main.py) ──────────────────────────────
-W_PAWN_COL = COL_CEM_ESQ_START
-W_MAJ_COL  = COL_CEM_ESQ_START + 1
-B_MAJ_COL  = COL_CEM_DIR_START
-B_PAWN_COL = COL_CEM_DIR_START + 1
-_MAJOR_ORDER = [chess.ROOK, chess.ROOK, chess.KNIGHT, chess.KNIGHT,
-                chess.BISHOP, chess.BISHOP, chess.QUEEN, chess.KING]
-W_MAJOR_SLOTS = [(pt, (row, W_MAJ_COL)) for row, pt in enumerate(_MAJOR_ORDER)]
-B_MAJOR_SLOTS = [(pt, (row, B_MAJ_COL)) for row, pt in enumerate(_MAJOR_ORDER)]
+# ── Layout das pecas nos cemiterios conforme mapeamento fisico ───────────────
+# Coluna 0: peoes cemiterio direito
+# Coluna 1: torre, cavalo, bispo, rei, rainha, bispo, cavalo, torre
+# Coluna 12: torre, cavalo, bispo, rei, rainha, bispo, cavalo, torre
+# Coluna 13: peoes cemiterio esquerdo
+_MAJOR_ORDER = [
+    chess.ROOK,
+    chess.KNIGHT,
+    chess.BISHOP,
+    chess.KING,
+    chess.QUEEN,
+    chess.BISHOP,
+    chess.KNIGHT,
+    chess.ROOK,
+]
+R_MAJOR_SLOTS = [(pt, (row, COL_CEM_DIR_NOBRE)) for row, pt in enumerate(_MAJOR_ORDER)]
+L_MAJOR_SLOTS = [(pt, (row, COL_CEM_ESQ_NOBRE)) for row, pt in enumerate(_MAJOR_ORDER)]
 
 
 class PlanningError(RuntimeError):
@@ -70,8 +78,15 @@ class Plan:
 
 
 def square_to_cell(sq: int) -> tuple[int, int]:
-    """Casa do xadrez -> celula logica global (linha, coluna)."""
-    return 7 - chess.square_rank(sq), COL_BOARD_START + chess.square_file(sq)
+    """
+    Casa do xadrez -> celula logica global (linha, coluna).
+
+    Linha 0 = Rank 8 (H8..A8)
+    Linha 7 = Rank 1 (H1..A1)
+    Coluna 3 = File H (H8..H1)
+    Coluna 10 = File A (A8..A1)
+    """
+    return 7 - chess.square_rank(sq), 10 - chess.square_file(sq)
 
 
 class MovePlanner:
@@ -81,7 +96,7 @@ class MovePlanner:
     @staticmethod
     def home_phys() -> tuple[int, int]:
         """Coordenada fisica (pr, pc) correspondente a (0.0, 0.0) mm no Top-Right (Direita em cima)."""
-        return 0, PHYS_COLS - 1  # (0, 26)
+        return 0, 0
 
     def reset(self) -> None:
         self.board = chess.Board()
@@ -116,15 +131,16 @@ class MovePlanner:
 
     @staticmethod
     def phys_to_mm(pr: int, pc: int) -> tuple[float, float]:
-        """Converte celula fisica (pr, pc) no grid 15x27 para mm (X, Y) do ESP32.
+        """
+        Converte celula fisica (pr, pc) no grid 15x27 para mm (X, Y) do ESP32.
 
         pr: 0..14 (0 = topo/em cima/Pretas -> 14 = base/em baixo/Brancas). Eixo X (0..350 mm).
-        pc: 0..26 (0 = esquerda/cem_esq -> 26 = direita/cem_dir). Eixo Y (0..650 mm).
-        Home (0.0, 0.0) fica no Top-Right (pr=0, pc=26).
+        pc: 0..26 (0 = direita/cem_dir -> 26 = esquerda/cem_esq). Eixo Y (0..650 mm).
+        Cada celula mede 25 mm x 25 mm (2.5 cm x 2.5 cm).
+        Home (0.0, 0.0) fica exatamente em (pr=0, pc=0).
         """
-        half = cfg.SQUARE_MM / 2.0
-        x_mm = pr * half
-        y_mm = (PHYS_COLS - 1 - pc) * half
+        x_mm = pr * cfg.CELL_MM
+        y_mm = pc * cfg.CELL_MM
         return x_mm, y_mm
 
     def cell_mm(self, cell: tuple[int, int]) -> tuple[float, float]:
@@ -133,10 +149,10 @@ class MovePlanner:
 
     # ── cemiterio ────────────────────────────────────────────────────────────
 
-    def cem_slot_for(self, piece_type: int, captured_color: bool):
-        white = captured_color == chess.WHITE
-        pawn_col = W_PAWN_COL if white else B_PAWN_COL
-        majors = W_MAJOR_SLOTS if white else B_MAJOR_SLOTS
+    def cem_slot_for(self, piece_type: int, captured_color: bool) -> tuple[int, int]:
+        white = (captured_color == chess.WHITE)
+        pawn_col = COL_CEM_DIR_PEAO if white else COL_CEM_ESQ_PEAO
+        majors = R_MAJOR_SLOTS if white else L_MAJOR_SLOTS
         grid = self.logic.grid
         if piece_type == chess.PAWN:
             for row in range(LOGIC_ROWS):
@@ -146,15 +162,16 @@ class MovePlanner:
             for pt, slot in majors:
                 if pt == piece_type and grid[slot[0]][slot[1]] == EMPTY:
                     return slot
-        # reserva: terceira coluna do cemiterio
-        spare = COL_CEM_ESQ_END if white else COL_CEM_DIR_END
+            for pt, slot in majors:
+                if grid[slot[0]][slot[1]] == EMPTY:
+                    return slot
         for row in range(LOGIC_ROWS):
-            if grid[row][spare] == EMPTY:
-                return (row, spare)
+            if grid[row][pawn_col] == EMPTY:
+                return (row, pawn_col)
         raise PlanningError("Cemiterio cheio.")
 
     def promotable_slot(self, piece_type: int, color: bool):
-        majors = W_MAJOR_SLOTS if color == chess.WHITE else B_MAJOR_SLOTS
+        majors = R_MAJOR_SLOTS if color == chess.WHITE else L_MAJOR_SLOTS
         for pt, slot in majors:
             if pt == piece_type and self.cem_occ.get(slot) == piece_type:
                 return slot

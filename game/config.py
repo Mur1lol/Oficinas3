@@ -14,17 +14,16 @@ ROOT = Path(__file__).resolve().parent.parent
 # Curso util calibrado do ESP32 (Gantry.h: CURSO_X=350, CURSO_Y=650)
 GANTRY_SIZE_MM = (350.0, 650.0)
 
-# Tamanho de cada casa do tabuleiro em mm:
-# Layout logico: 14 colunas x 8 linhas (layout fisico 27x15 contando as bordas internas)
-# Eixo X (linhas 0..7): 7 passos de 40mm = 280 mm (cabe dentro do limite de 350 mm)
-# Eixo Y (colunas 0..13): 13 passos de 40mm = 520 mm (cabe dentro do limite de 650 mm)
-SQUARE_MM = 40.0
+# Cada celula fisica no grid 15x27 tem 2,5 cm x 2,5 cm (25 mm x 25 mm).
+# Cada casa/coluna fisica mede 5 cm x 5 cm (50 mm x 50 mm).
+CELL_MM = 25.0
+SQUARE_MM = 50.0
 
 # O ponto (0, 0) do ESP32 fica na DIREITA EM CIMA (Top-Right) por conta dos sensores fisicos.
-# Row 0 (Pretas / topo) -> X = 0.0 mm
-# Col 13 (Cemiterio direito / direita) -> Y = 0.0 mm
-HOME_CELL = (0, 13)       # celula logica (linha, coluna) correspondente a (0, 0)
-HOME_PHYS = (0, 26)       # celula fisica (pr, pc) correspondente a (0, 0)
+# Row 0 (Pretas / topo / H8..A8) -> X = 0.0 mm
+# Col 0 (Cemiterio direito / peoes) -> Y = 0.0 mm
+HOME_CELL = (0, 0)        # celula logica (linha, coluna) correspondente a (0, 0)
+HOME_PHYS = (0, 0)        # celula fisica (pr, pc) correspondente a (0, 0)
 
 # Offset opcional se o tabuleiro tiver margem em relacao aos sensores de homing
 GANTRY_OFFSET_MM = (0.0, 0.0)
@@ -34,8 +33,8 @@ GANTRY_TIMEOUT_S = 180.0  # tempo maximo esperando o ESP32 terminar uma jogada
 def game_to_gantry(x: float, y: float) -> tuple[float, float]:
     """Coordenada em mm do planner -> coordenada absoluta do ESP32 (mm).
 
-    X: 0..350 mm (linhas: 0 no topo/pretas -> 280 na base/brancas).
-    Y: 0..650 mm (colunas: 0 na direita/cem_dir -> 520 na esquerda/cem_esq).
+    X: 0..350 mm (linhas 0..14 no grid fisico: 0 no topo/pretas -> 350 na base/brancas).
+    Y: 0..650 mm (colunas 0..26 no grid fisico: 0 na direita/cem_dir -> 650 na esquerda/cem_esq).
     Home (0, 0): Direita em cima (Top-Right, sensores fisicos).
     """
     gx = x + GANTRY_OFFSET_MM[0]
