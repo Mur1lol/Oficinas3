@@ -43,9 +43,9 @@ class GameAbort(RuntimeError):
 
 class VoiceChessGame:
     def __init__(self, leds, lcd, speaker, gantry, listener_factory,
-                 stockfish_path: str | None = None) -> None:
+                 stockfish_path: str | None = None, return_home: bool = True) -> None:
         self.leds, self.lcd, self.speaker, self.gantry = leds, lcd, speaker, gantry
-        self.planner = MovePlanner()
+        self.planner = MovePlanner(return_home=return_home)
         self.level = cfg.DEFAULT_LEVEL
         self._stockfish_path = stockfish_path or cfg.find_stockfish()
         self._engine: chess.engine.SimpleEngine | None = None

@@ -2,6 +2,7 @@
 
 Exemplos de uso:
     python main.py                       # Modo real completo (microfone + ESP32 + perifericos)
+    python main.py --no-return-home      # Mantem o gantry na ultima posicao entre lances
     python main.py --text --sim-gantry --sim-peripherals   # Modo 100% simulado no terminal
 """
 

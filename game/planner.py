@@ -90,7 +90,8 @@ def square_to_cell(sq: int) -> tuple[int, int]:
 
 
 class MovePlanner:
-    def __init__(self) -> None:
+    def __init__(self, return_home: bool = True) -> None:
+        self.return_home = return_home
         self.reset()
 
     @staticmethod
@@ -258,9 +259,9 @@ class MovePlanner:
         fr, to = square_to_cell(move.from_square), square_to_cell(move.to_square)
         to_piece = cb.piece_at(move.to_square)
 
-        # O robo sempre parte do ponto (0.0, 0.0) mm no Top-Right (Homing)
-        self.robot_phys = self.home_phys()
-        self._emit(0.0, 0.0, 0)
+        if self.return_home:
+            self.robot_phys = self.home_phys()
+            self._emit(0.0, 0.0, 0)
 
         if cb.is_castling(move):
             kingside = chess.square_file(move.to_square) == 6
@@ -304,5 +305,5 @@ class MovePlanner:
         self.board.push(move)
         self.carrying = False
         self._rebuild()
-        # Retorna com seguranca para o Home (0, 0)
-        self._navigate_phys(self.home_phys())
+        if self.return_home:
+            self._navigate_phys(self.home_phys())

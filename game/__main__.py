@@ -23,6 +23,8 @@ def main() -> None:
     ap.add_argument("--sim-peripherals", action="store_true", help="LEDs/LCD/speaker simulados")
     ap.add_argument("--port", default=None, help="porta serial do ESP32 (ex.: COM3, /dev/ttyUSB0)")
     ap.add_argument("--voice-config", default=str(cfg.VOICE_CONFIG))
+    ap.add_argument("--no-return-home", action="store_true",
+                    help="mantem o gantry na ultima posicao entre lances")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,
@@ -41,7 +43,8 @@ def main() -> None:
         factory = lambda on_l, on_c, before: VoiceListener(                          # noqa: E731
             args.voice_config, on_l, on_c, before)
 
-    VoiceChessGame(leds, lcd, speaker, gantry, factory).run()
+    VoiceChessGame(leds, lcd, speaker, gantry, factory,
+                   return_home=not args.no_return_home).run()
 
 
 if __name__ == "__main__":

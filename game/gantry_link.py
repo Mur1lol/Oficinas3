@@ -72,7 +72,6 @@ class SimulatedGantry:
             gx, gy = cfg.game_to_gantry(xi, yi)
             print(f"      -> X={gx:6.1f} Y={gy:6.1f} ima={'ON ' if mi else 'off'}")
         time.sleep(self.SIM_SECONDS_PER_STEP * len(x))
-        print("   [GANTRY] (simulado) retornando ao homing (x=   0.0 y=   0.0 ima=off)")
 
     def close(self) -> None:
         pass
