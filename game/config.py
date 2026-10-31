@@ -11,36 +11,38 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # ── Tabuleiro / Gantry ───────────────────────────────────────────────────────
-SQUARE_MM = 50.0          # cada casa tem 5 cm (50 mm) por conta dos vaos
-# Origem do Gantry (X=0, Y=0) = canto da FRENTE, a esquerda (lado das brancas / rank 1).
-# True  -> a fileira 1 (brancas) fica perto de Y=0.
-# False -> a fileira 8 fica perto de Y=0 (inverte o eixo Y).
-INVERT_Y = True
-HOME_CELL = (7, 0)        # celula logica (linha, coluna) mais proxima do home do Gantry
+# Curso util calibrado do ESP32 (Gantry.h: CURSO_X=350, CURSO_Y=650)
+GANTRY_SIZE_MM = (350.0, 650.0)
 
-# O jogo pensa em x = 0..800 (16 colunas) e y = 0..400 (8 linhas). No gantry montado
-# o lado de 650 mm e o eixo Y (perfis de 900, frente -> tras) e o de 350 mm e o X
-# (viga, esquerda -> direita, olhando com os motores na frente). Home = (0, 0).
-# game_to_gantry() converte; ajuste os flags com o teste "cantos" (teste_integracao.py).
-GANTRY_SWAP_XY = True     # True: x do jogo -> Y do gantry, y do jogo -> X do gantry
-GANTRY_FLIP_X = False     # depois da troca: X_gantry = 350 - X_gantry
-GANTRY_FLIP_Y = False     # depois da troca: Y_gantry = 650 - Y_gantry
-GANTRY_OFFSET_MM = (0.0, 0.0)   # (X, Y) somado no fim: onde fica o canto do tabuleiro
-GANTRY_SIZE_MM = (350.0, 650.0) # curso util (X, Y), igual ao CURSO_X/CURSO_Y do ESP32
+# Tamanho de cada casa do tabuleiro em mm:
+# Layout logico: 14 colunas x 8 linhas (layout fisico 27x15 contando as bordas internas)
+# Eixo X (linhas 0..7): 7 passos de 40mm = 280 mm (cabe dentro do limite de 350 mm)
+# Eixo Y (colunas 0..13): 13 passos de 40mm = 520 mm (cabe dentro do limite de 650 mm)
+SQUARE_MM = 40.0
+
+# O ponto (0, 0) do ESP32 fica na DIREITA EM CIMA (Top-Right) por conta dos sensores fisicos.
+# Row 0 (Pretas / topo) -> X = 0.0 mm
+# Col 13 (Cemiterio direito / direita) -> Y = 0.0 mm
+HOME_CELL = (0, 13)       # celula logica (linha, coluna) correspondente a (0, 0)
+HOME_PHYS = (0, 26)       # celula fisica (pr, pc) correspondente a (0, 0)
+
+# Offset opcional se o tabuleiro tiver margem em relacao aos sensores de homing
+GANTRY_OFFSET_MM = (0.0, 0.0)
+GANTRY_TIMEOUT_S = 180.0  # tempo maximo esperando o ESP32 terminar uma jogada
 
 
 def game_to_gantry(x: float, y: float) -> tuple[float, float]:
-    """Coordenada do planner (mm) -> coordenada do ESP32 (mm)."""
-    if GANTRY_SWAP_XY:
-        x, y = y, x
-    if GANTRY_FLIP_X:
-        x = GANTRY_SIZE_MM[0] - x
-    if GANTRY_FLIP_Y:
-        y = GANTRY_SIZE_MM[1] - y
-    return round(x + GANTRY_OFFSET_MM[0], 2), round(y + GANTRY_OFFSET_MM[1], 2)
+    """Coordenada em mm do planner -> coordenada absoluta do ESP32 (mm).
 
-
-GANTRY_TIMEOUT_S = 180.0  # tempo maximo esperando o ESP32 terminar uma jogada
+    X: 0..350 mm (linhas: 0 no topo/pretas -> 280 na base/brancas).
+    Y: 0..650 mm (colunas: 0 na direita/cem_dir -> 520 na esquerda/cem_esq).
+    Home (0, 0): Direita em cima (Top-Right, sensores fisicos).
+    """
+    gx = x + GANTRY_OFFSET_MM[0]
+    gy = y + GANTRY_OFFSET_MM[1]
+    gx = max(0.0, min(GANTRY_SIZE_MM[0], gx))
+    gy = max(0.0, min(GANTRY_SIZE_MM[1], gy))
+    return round(gx, 2), round(gy, 2)
 
 # ── LEDs (um LED RGB de cada lado do tabuleiro) ──────────────────────────────
 # Pinos BCM (R, G, B) da PCB C: brancas 17/27/22 (J5), pretas 5/6/13 (J6).

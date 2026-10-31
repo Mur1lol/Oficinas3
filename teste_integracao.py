@@ -9,7 +9,7 @@ Rode na raiz do projeto (onde ficam game/ e comunication/):
     python3 teste_integracao.py microfone            # teste de captura e medidor de volume (VU)
     python3 teste_integracao.py voz                  # teste completo de reconhecimento de voz
     python3 teste_integracao.py status               # status do ESP32
-    python3 teste_integracao.py homing               # homing do gantry (canto da frente a direita)
+    python3 teste_integracao.py homing               # homing do gantry (canto superior direito / direita em cima)
     python3 teste_integracao.py cantos               # passeia pelos 4 cantos + centro
     python3 teste_integracao.py ima                  # liga o eletroima 2 s e desliga
     python3 teste_integracao.py lance e2e4           # planeja um lance e executa SEM ima
@@ -304,8 +304,15 @@ def homing(args):
 def cantos(args):
     m = 20.0  # fica 20 mm longe das bordas
     sx, sy = cfg.GANTRY_SIZE_MM
-    pts = [(sx - m, m), (m, m), (m, sy - m), (sx - m, sy - m), (sx / 2, sy / 2)]
-    nomes = ["frente-direita", "frente-esquerda", "tras-esquerda", "tras-direita", "centro"]
+    # Home (0, 0) = Direita em cima (trás-direita)
+    pts = [(m, m), (m, sy - m), (sx - m, sy - m), (sx - m, m), (sx / 2, sy / 2)]
+    nomes = [
+        "tras-direita (topo-direita / perto do home)",
+        "tras-esquerda (topo-esquerda)",
+        "frente-esquerda (base-esquerda)",
+        "frente-direita (base-direita)",
+        "centro"
+    ]
     with conectar(args) as esp:
         if not esp.obter_status().get("homed"):
             print("sem home: rodando o homing antes")

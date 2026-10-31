@@ -32,7 +32,7 @@ import chess
 from . import config as cfg
 
 sys.path.insert(0, str(cfg.ROOT / "navigation"))
-from board import (BoardLogic, PIECE, EMPTY, LOGIC_ROWS, PHYS_ROWS,          # noqa: E402
+from board import (BoardLogic, PIECE, EMPTY, LOGIC_ROWS, PHYS_ROWS, PHYS_COLS,  # noqa: E402
                    COL_BOARD_START, COL_CEM_ESQ_START, COL_CEM_ESQ_END,
                    COL_CEM_DIR_START, COL_CEM_DIR_END)
 from pathfinder import find_path_logical, find_path_physical                     # noqa: E402
@@ -80,8 +80,8 @@ class MovePlanner:
 
     @staticmethod
     def home_phys() -> tuple[int, int]:
-        """Coordenada fisica (pr, pc) correspondente a (0.0, 0.0) mm."""
-        return (PHYS_ROWS - 1, 0) if cfg.INVERT_Y else (0, 0)
+        """Coordenada fisica (pr, pc) correspondente a (0.0, 0.0) mm no Top-Right (Direita em cima)."""
+        return 0, PHYS_COLS - 1  # (0, 26)
 
     def reset(self) -> None:
         self.board = chess.Board()
@@ -116,12 +116,20 @@ class MovePlanner:
 
     @staticmethod
     def phys_to_mm(pr: int, pc: int) -> tuple[float, float]:
+        """Converte celula fisica (pr, pc) no grid 15x27 para mm (X, Y) do ESP32.
+
+        pr: 0..14 (0 = topo/em cima/Pretas -> 14 = base/em baixo/Brancas). Eixo X (0..350 mm).
+        pc: 0..26 (0 = esquerda/cem_esq -> 26 = direita/cem_dir). Eixo Y (0..650 mm).
+        Home (0.0, 0.0) fica no Top-Right (pr=0, pc=26).
+        """
         half = cfg.SQUARE_MM / 2.0
-        y_idx = (PHYS_ROWS - 1 - pr) if cfg.INVERT_Y else pr
-        return pc * half, y_idx * half
+        x_mm = pr * half
+        y_mm = (PHYS_COLS - 1 - pc) * half
+        return x_mm, y_mm
 
     def cell_mm(self, cell: tuple[int, int]) -> tuple[float, float]:
-        return self.phys_to_mm(cell[0] * 2 + 1, cell[1] * 2 + 1)
+        """Coordenada logica (row, col) no grid 14x8 -> (X, Y) em mm."""
+        return self.phys_to_mm(cell[0] * 2, cell[1] * 2)
 
     # ── cemiterio ────────────────────────────────────────────────────────────
 
@@ -185,7 +193,7 @@ class MovePlanner:
         self.robot_phys = dest_phys
 
     def _navigate(self, dest: tuple[int, int]) -> None:
-        dest_phys = (dest[0] * 2 + 1, dest[1] * 2 + 1)
+        dest_phys = (dest[0] * 2, dest[1] * 2)
         self._navigate_phys(dest_phys)
 
     def _pickup(self, cell: tuple[int, int]) -> None:
@@ -233,7 +241,7 @@ class MovePlanner:
         fr, to = square_to_cell(move.from_square), square_to_cell(move.to_square)
         to_piece = cb.piece_at(move.to_square)
 
-        # O robo sempre parte do ponto (0.0, 0.0) mm (Homing)
+        # O robo sempre parte do ponto (0.0, 0.0) mm no Top-Right (Homing)
         self.robot_phys = self.home_phys()
         self._emit(0.0, 0.0, 0)
 
@@ -279,4 +287,5 @@ class MovePlanner:
         self.board.push(move)
         self.carrying = False
         self._rebuild()
-        self.robot_phys = self.home_phys()
+        # Retorna com seguranca para o Home (0, 0)
+        self._navigate_phys(self.home_phys())

@@ -245,7 +245,7 @@ def find_path_logical(
     origin_logical: tuple,
     dest_logical: tuple,
 ) -> dict | None:
-    """Calcula o caminho no grid fisico 17x33 entre duas coordenadas logicas globais."""
+    """Calcula o caminho no grid fisico 15x27 entre duas coordenadas logicas globais."""
     from board import LOGIC_ROWS, LOGIC_COLS
 
     or_r, or_c = origin_logical
@@ -256,8 +256,8 @@ def find_path_logical(
     if not (0 <= ds_r < LOGIC_ROWS and 0 <= ds_c < LOGIC_COLS):
         raise ValueError(f"Destino logico ({ds_r},{ds_c}) fora do grid.")
 
-    start = (or_r * 2 + 1, or_c * 2 + 1)
-    goal = (ds_r * 2 + 1, ds_c * 2 + 1)
+    start = board_logic.to_physical(or_r, or_c)
+    goal = board_logic.to_physical(ds_r, ds_c)
     return find_path_physical(board_logic, start, goal)
 
 
