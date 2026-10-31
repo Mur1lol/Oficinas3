@@ -90,8 +90,13 @@ def square_to_cell(sq: int) -> tuple[int, int]:
 
 
 class MovePlanner:
-    def __init__(self, return_home: bool = True) -> None:
+    def __init__(
+        self,
+        return_home: bool = True,
+        overshoot_mm: float = cfg.RELEASE_OVERSHOOT_MM,
+    ) -> None:
         self.return_home = return_home
+        self.overshoot_mm = overshoot_mm
         self.reset()
 
     @staticmethod
@@ -210,7 +215,20 @@ class MovePlanner:
                 a, b, c = pts[i - 1], pts[i], pts[i + 1]
                 if (b[0] - a[0], b[1] - a[1]) == (c[0] - b[0], c[1] - b[1]):
                     continue
-            self._emit(pts[i][0], pts[i][1], ima)
+            x, y = pts[i][0], pts[i][1]
+            if i == len(pts) - 1 and self.carrying and self.overshoot_mm > 0:
+                p_prev = pts[i - 1]
+                dx = x - p_prev[0]
+                dy = y - p_prev[1]
+                if abs(dx) > 0:
+                    dir_x = 1.0 if dx > 0 else -1.0
+                    x = max(0.0, min(cfg.GANTRY_SIZE_MM[0], x + dir_x * self.overshoot_mm))
+                elif abs(dy) > 0:
+                    dir_y = 1.0 if dy > 0 else -1.0
+                    y = max(0.0, min(cfg.GANTRY_SIZE_MM[1], y + dir_y * self.overshoot_mm))
+                x = round(x, 2)
+                y = round(y, 2)
+            self._emit(x, y, ima)
         self.robot_phys = dest_phys
 
     def _navigate(self, dest: tuple[int, int]) -> None:

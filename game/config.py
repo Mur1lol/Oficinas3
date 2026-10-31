@@ -29,6 +29,9 @@ HOME_PHYS = (0, 0)        # celula fisica (pr, pc) correspondente a (0, 0)
 GANTRY_OFFSET_MM = (0.0, 0.0)
 GANTRY_TIMEOUT_S = 180.0  # tempo maximo esperando o ESP32 terminar uma jogada
 
+# Compensacao de arraste/delay do eletroima (overshoot em mm na direcao do movimento antes de soltar a peca)
+RELEASE_OVERSHOOT_MM = 5.0
+
 
 def game_to_gantry(x: float, y: float) -> tuple[float, float]:
     """Coordenada em mm do planner -> coordenada absoluta do ESP32 (mm).
