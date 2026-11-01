@@ -35,6 +35,16 @@ if not _pieces_candidate.is_dir():
     _pieces_candidate = OFICINAS_DIR / "pieces"
 PIECES_DIR: str = str(_pieces_candidate)
 
+# Amostras REAIS capturadas pela camera (uma pasta por <tipo>_<cor>, ex.: knight_black/).
+# Quando existem, o classificador usa estas amostras em vez dos icones genericos.
+PIECE_SAMPLES_DIR: str = str(VISION_DIR / "pieces" / "samples")
+
+# Correlacao minima (TM_CCOEFF_NORMED) com a melhor amostra para aceitar o tipo
+PIECE_SAMPLE_MIN_SCORE: float = 0.50
+
+# Diferenca minima entre o melhor e o segundo melhor tipo
+PIECE_SAMPLE_MIN_MARGIN: float = 0.04
+
 # ---------------------------------------------------------------------------
 # Camera capture
 # ---------------------------------------------------------------------------
