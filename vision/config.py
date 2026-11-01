@@ -30,7 +30,10 @@ CALIBRATION_FILE: str = str(VISION_DIR / "camera_calibration.json")
 DIAGNOSTIC_DIR: str = str(VISION_DIR / "diags")
 
 # Reference images of each piece (<Type>_<Color>.png) used for type matching
-PIECES_DIR: str = str(OFICINAS_DIR / "pieces")
+_pieces_candidate = VISION_DIR / "pieces"
+if not _pieces_candidate.is_dir():
+    _pieces_candidate = OFICINAS_DIR / "pieces"
+PIECES_DIR: str = str(_pieces_candidate)
 
 # ---------------------------------------------------------------------------
 # Camera capture
