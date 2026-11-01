@@ -2,18 +2,21 @@
 """
 vision/scripts/web_calibrator.py
 ================================
-Web-based Camera & Board Calibration Tool for Headless Raspberry Pi.
+Web-based Camera & Board Calibration Tool with LIVE VIEW for Headless Raspberry Pi.
 
-Provides a lightweight web interface to calibrate the chessboard corners,
-view live streams, preview perspective correction, save camera_calibration.json,
-and record empty board reference images — all accessible from a PC browser
-without requiring X11/GUI or extra pip dependencies (uses Python standard library).
+Provides a responsive web interface to:
+  - View Live Camera Stream (MJPEG) with real-time draggable corner overlay
+  - View Live Warped Board Preview (perspective corrected with 8x8 grid)
+  - Freeze / Unfreeze frame (Live / Snapshot toggle)
+  - Fine-tune corners with pixel inputs
+  - Adjust detection sensitivity threshold live
+  - Run visual piece occupancy detection with highlighted squares
+  - Save camera_calibration.json and reference_empty.png directly on the Pi
 
 Usage:
 ------
     python vision/scripts/web_calibrator.py
     python vision/scripts/web_calibrator.py --port 5000 --device 0
-    python vision/scripts/web_calibrator.py --image path/to/sample.jpg
 """
 
 from __future__ import annotations
@@ -22,7 +25,6 @@ import argparse
 import base64
 import json
 import logging
-import os
 import socket
 import sys
 import threading
@@ -30,7 +32,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
@@ -52,7 +54,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VoiceChess — Calibrador de Câmera</title>
+  <title>VoiceChess — Calibrador & Live View</title>
   <style>
     :root {
       --bg: #0f172a;
@@ -61,59 +63,71 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       --accent: #38bdf8;
       --accent-hover: #0284c7;
       --success: #22c55e;
+      --danger: #ef4444;
       --text: #f8fafc;
       --text-muted: #94a3b8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background: var(--bg); color: var(--text); padding: 1.5rem; }
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--card-border); }
-    h1 { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
-    .status-badge { background: #065f46; color: #34d399; font-size: 0.85rem; padding: 0.25rem 0.75rem; border-radius: 9999px; font-weight: 600; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    body { background: var(--bg); color: var(--text); padding: 1.25rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--card-border); }
+    h1 { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+    .status-badge { background: #065f46; color: #34d399; font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 9999px; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; }
+    .live-dot { width: 8px; height: 8px; background: #ef4444; border-radius: 50%; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
     @media (max-width: 1024px) { .grid { grid-template-columns: 1fr; } }
-    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 0.75rem; padding: 1.25rem; }
-    .card-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; }
-    .canvas-container { position: relative; width: 100%; border-radius: 0.5rem; overflow: hidden; background: #000; cursor: crosshair; }
-    canvas { display: block; width: 100%; height: auto; }
-    .preview-img { width: 100%; height: auto; border-radius: 0.5rem; background: #000; aspect-ratio: 1; object-fit: contain; }
-    .controls { margin-top: 1.25rem; display: flex; flex-direction: column; gap: 1rem; }
-    .point-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
-    .point-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; background: #0f172a80; padding: 0.4rem 0.6rem; border-radius: 0.375rem; }
-    .point-color { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
-    .point-input { width: 60px; background: #0f172a; border: 1px solid var(--card-border); color: #fff; padding: 0.2rem 0.4rem; border-radius: 0.25rem; text-align: center; font-size: 0.8rem; }
-    .btn-group { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem; }
-    button { background: var(--accent); color: #000; font-weight: 600; border: none; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; transition: 0.15s ease; font-size: 0.9rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 0.75rem; padding: 1.25rem; display: flex; flex-direction: column; }
+    .card-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center; }
+    .view-wrapper { position: relative; width: 100%; border-radius: 0.5rem; overflow: hidden; background: #000; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; }
+    .preview-wrapper { position: relative; width: 100%; border-radius: 0.5rem; overflow: hidden; background: #000; aspect-ratio: 16/10; display: flex; align-items: center; justify-content: center; }
+    .stream-img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    #overlayCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; }
+    .controls { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.8rem; }
+    .point-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.4rem; }
+    .point-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; background: #0f172a80; padding: 0.35rem 0.5rem; border-radius: 0.375rem; }
+    .point-color { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .point-input { width: 55px; background: #0f172a; border: 1px solid var(--card-border); color: #fff; padding: 0.2rem 0.3rem; border-radius: 0.25rem; text-align: center; font-size: 0.75rem; }
+    .btn-group { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+    button { background: var(--accent); color: #000; font-weight: 600; border: none; padding: 0.55rem 1rem; border-radius: 0.45rem; cursor: pointer; transition: 0.15s ease; font-size: 0.85rem; }
     button:hover { background: var(--accent-hover); color: #fff; }
     button.btn-success { background: var(--success); color: #000; }
     button.btn-success:hover { background: #16a34a; color: #fff; }
     button.btn-secondary { background: #334155; color: #fff; }
     button.btn-secondary:hover { background: #475569; }
-    .alert { padding: 0.75rem 1rem; border-radius: 0.5rem; margin-top: 1rem; font-size: 0.9rem; display: none; }
+    button.btn-active { background: #0284c7; color: #fff; }
+    .alert { padding: 0.6rem 0.9rem; border-radius: 0.45rem; margin-top: 0.8rem; font-size: 0.85rem; display: none; line-height: 1.4; }
     .alert-success { background: #064e3b; border: 1px solid #059669; color: #6ee7b7; }
     .alert-error { background: #7f1d1d; border: 1px solid #dc2626; color: #fca5a5; }
-    .instructions { font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-top: 0.75rem; }
-    .instructions strong { color: var(--text); }
+    .slider-box { display: flex; align-items: center; gap: 0.8rem; font-size: 0.85rem; background: #0f172a60; padding: 0.5rem 0.75rem; border-radius: 0.375rem; }
+    .slider-box input[type=range] { flex: 1; }
+    .instructions { font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; margin-top: 0.4rem; }
   </style>
 </head>
 <body>
   <header>
     <div>
-      <h1>VoiceChess — Calibrador Web</h1>
-      <p style="color: var(--text-muted); font-size: 0.85rem;">Calibração de perspectiva do tabuleiro para Raspberry Pi (Modo Headless)</p>
+      <h1>VoiceChess — Calibrador & Live View</h1>
+      <p style="color: var(--text-muted); font-size: 0.8rem;">Vídeo ao vivo da câmera e ajuste da perspectiva do tabuleiro</p>
     </div>
-    <span class="status-badge" id="cameraStatus">Câmera Conectada</span>
+    <div style="display: flex; gap: 0.75rem; align-items: center;">
+      <span class="status-badge"><span class="live-dot"></span> <span id="modeText">Ao Vivo</span></span>
+    </div>
   </header>
 
   <div class="grid">
-    <!-- COLUNA 1: IMAGEM DA CÂMERA E SELEÇÃO DE CANTOS -->
+    <!-- COLUNA 1: VÍDEO DA CÂMERA AO VIVO COM OVERLAY DE CANTOS -->
     <div class="card">
       <div class="card-title">
-        <span>Imagem da Câmera (Clique nos 4 Cantos)</span>
-        <button class="btn-secondary" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;" onclick="fetchSnapshot()">Atualizar Frame</button>
+        <span>Câmera (Arraste ou clique nos 4 cantos)</span>
+        <div style="display: flex; gap: 0.4rem;">
+          <button id="btnToggleLive" class="btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;" onclick="toggleLiveMode()">⏸️ Congelar Frame</button>
+          <button class="btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;" onclick="refreshStream()">🔄 Recarregar</button>
+        </div>
       </div>
 
-      <div class="canvas-container" id="canvasBox">
-        <canvas id="canvas"></canvas>
+      <div class="view-wrapper" id="viewBox">
+        <img id="cameraImg" class="stream-img" src="/stream" alt="Live stream">
+        <canvas id="overlayCanvas"></canvas>
       </div>
 
       <div class="controls">
@@ -145,9 +159,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
 
         <div class="instructions">
-          <strong>Como usar:</strong> Clique em sentido horário nos 4 cantos da grade do tabuleiro:
-          1 (A8 / Sup-Esq) &rarr; 2 (H8 / Sup-Dir) &rarr; 3 (H1 / Inf-Dir) &rarr; 4 (A1 / Inf-Esq).
-          Você também pode arrastar os círculos ou ajustar os valores numéricos.
+          Arraste os círculos numerados até os 4 cantos da grade do tabuleiro (1=A8, 2=H8, 3=H1, 4=A1).
         </div>
 
         <div class="btn-group">
@@ -157,86 +169,151 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- COLUNA 2: PREVIEW RETIFICADO E AÇÕES -->
+    <!-- COLUNA 2: PREVIEW RETIFICADO AO VIVO E DETECÇÃO -->
     <div class="card">
       <div class="card-title">
-        <span>Tabuleiro Corrigido (Vista Superior 8x8)</span>
-        <button class="btn-secondary" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;" onclick="updatePreview()">Recalcular</button>
+        <span>Tabuleiro Corrigido (Live View 8x8)</span>
+        <span id="warpStatus" style="font-size: 0.8rem; color: var(--text-muted);">Grade ativa</span>
       </div>
 
-      <img id="previewImg" class="preview-img" alt="Preview da calibração aparecerá aqui">
+      <div class="preview-wrapper">
+        <img id="previewImg" class="stream-img" src="/stream_warped" alt="Preview da calibração">
+      </div>
 
       <div class="controls">
-        <div style="display: flex; gap: 1rem; align-items: center;">
-          <label style="font-size: 0.9rem; color: var(--text-muted);">Orientação:</label>
-          <select id="orientationSelect" class="point-input" style="width: auto; padding: 0.3rem 0.6rem;" onchange="updatePreview()">
-            <option value="normal">Normal (A1 em baixo à esquerda)</option>
-            <option value="flipped">Invertida (A1 no topo à direita)</option>
-          </select>
+        <div style="display: flex; gap: 1rem; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <label style="font-size: 0.85rem; color: var(--text-muted);">Orientação:</label>
+            <select id="orientationSelect" class="point-input" style="width: auto; padding: 0.25rem 0.5rem;" onchange="syncCorners()">
+              <option value="normal">Normal (A1 em baixo à esquerda)</option>
+              <option value="flipped">Invertida (A1 no topo à direita)</option>
+            </select>
+          </div>
+          <button class="btn-success" onclick="saveCalibration()">💾 Salvar Calibração</button>
         </div>
 
-        <div class="btn-group" style="margin-top: 1rem;">
-          <button class="btn-success" onclick="saveCalibration()">💾 Salvar Calibração</button>
+        <!-- Controle de Sensibilidade da Detecção -->
+        <div class="slider-box">
+          <span>Sensibilidade (Limiar MAD):</span>
+          <input type="range" id="thresholdSlider" min="0.04" max="0.25" step="0.01" value="0.10" oninput="updateSliderVal(this.value)">
+          <strong id="thresholdVal" style="color: var(--accent);">0.10</strong>
+        </div>
+
+        <div class="btn-group" style="margin-top: 0.4rem;">
           <button class="btn-secondary" onclick="saveReference()">📷 Gravar Tabuleiro Vazio</button>
           <button class="btn-secondary" onclick="testDetection()">🔍 Testar Ocupação</button>
         </div>
 
         <div id="alertBox" class="alert"></div>
-
-        <div id="detectionInfo" style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted); display: none;"></div>
+        <div id="detectionInfo" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-muted); display: none; line-height: 1.5; background: #0f172a60; padding: 0.6rem; border-radius: 0.4rem;"></div>
       </div>
     </div>
   </div>
 
   <script>
-    const canvas = document.getElementById("canvas");
+    const cameraImg = document.getElementById("cameraImg");
+    const previewImg = document.getElementById("previewImg");
+    const canvas = document.getElementById("overlayCanvas");
     const ctx = canvas.getContext("2d");
-    let currentImage = new Image();
-    let corners = []; // [[x,y], ...]
+
+    let isLive = true;
+    let corners = [];
     let activeDragIdx = -1;
     const colors = ["#38bdf8", "#4ade80", "#facc15", "#fb923c"];
+    let naturalW = 1280;
+    let naturalH = 720;
 
     function showAlert(msg, isSuccess = true) {
       const box = document.getElementById("alertBox");
       box.className = "alert " + (isSuccess ? "alert-success" : "alert-error");
-      box.textContent = msg;
+      box.innerHTML = msg;
       box.style.display = "block";
-      setTimeout(() => { box.style.display = "none"; }, 5000);
+      setTimeout(() => { box.style.display = "none"; }, 6000);
     }
 
-    function fetchSnapshot() {
-      currentImage.src = "/api/snapshot?t=" + new Date().getTime();
+    function updateSliderVal(v) {
+      document.getElementById("thresholdVal").textContent = parseFloat(v).toFixed(2);
     }
 
-    currentImage.onload = function() {
-      canvas.width = currentImage.naturalWidth;
-      canvas.height = currentImage.naturalHeight;
-      renderCanvas();
+    function toggleLiveMode() {
+      const btn = document.getElementById("btnToggleLive");
+      const dot = document.querySelector(".live-dot");
+      const text = document.getElementById("modeText");
+      if (isLive) {
+        // Congela: muda src para um snapshot estático
+        isLive = false;
+        cameraImg.src = "/api/snapshot?t=" + Date.now();
+        previewImg.src = "/api/snapshot_warped?t=" + Date.now();
+        btn.textContent = "▶️ Retomar Ao Vivo";
+        btn.className = "btn-secondary btn-active";
+        dot.style.background = "#94a3b8";
+        text.textContent = "Pausado";
+      } else {
+        // Retoma stream
+        isLive = true;
+        cameraImg.src = "/stream?t=" + Date.now();
+        previewImg.src = "/stream_warped?t=" + Date.now();
+        btn.textContent = "⏸️ Congelar Frame";
+        btn.className = "btn-secondary";
+        dot.style.background = "#ef4444";
+        text.textContent = "Ao Vivo";
+      }
+    }
+
+    function refreshStream() {
+      if (isLive) {
+        cameraImg.src = "/stream?t=" + Date.now();
+        previewImg.src = "/stream_warped?t=" + Date.now();
+      } else {
+        cameraImg.src = "/api/snapshot?t=" + Date.now();
+      }
+    }
+
+    function resizeOverlay() {
+      const rect = cameraImg.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      renderOverlay();
+    }
+
+    window.addEventListener("resize", resizeOverlay);
+    cameraImg.onload = function() {
+      if (cameraImg.naturalWidth) {
+        naturalW = cameraImg.naturalWidth;
+        naturalH = cameraImg.naturalHeight;
+      }
+      resizeOverlay();
     };
 
-    function renderCanvas() {
+    function renderOverlay() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(currentImage, 0, 0);
+      if (corners.length === 0) return;
+
+      const scaleX = canvas.width / naturalW;
+      const scaleY = canvas.height / naturalH;
 
       if (corners.length >= 2) {
         ctx.beginPath();
-        ctx.moveTo(corners[0][0], corners[0][1]);
+        ctx.moveTo(corners[0][0] * scaleX, corners[0][1] * scaleY);
         for (let i = 1; i < corners.length; i++) {
-          ctx.lineTo(corners[i][0], corners[i][1]);
+          ctx.lineTo(corners[i][0] * scaleX, corners[i][1] * scaleY);
         }
         if (corners.length === 4) {
           ctx.closePath();
-          ctx.fillStyle = "rgba(56, 189, 248, 0.15)";
+          ctx.fillStyle = "rgba(56, 189, 248, 0.18)";
           ctx.fill();
         }
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2.5;
         ctx.strokeStyle = "#38bdf8";
         ctx.stroke();
       }
 
       corners.forEach((pt, idx) => {
+        const cx = pt[0] * scaleX;
+        const cy = pt[1] * scaleY;
+
         ctx.beginPath();
-        ctx.arc(pt[0], pt[1], 10, 0, 2 * Math.PI);
+        ctx.arc(cx, cy, 9, 0, 2 * Math.PI);
         ctx.fillStyle = colors[idx];
         ctx.fill();
         ctx.lineWidth = 2;
@@ -244,8 +321,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         ctx.stroke();
 
         ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 14px sans-serif";
-        ctx.fillText((idx + 1).toString(), pt[0] + 14, pt[1] + 5);
+        ctx.font = "bold 13px sans-serif";
+        ctx.fillText((idx + 1).toString(), cx + 12, cy + 4);
 
         const xi = document.getElementById("x" + idx);
         const yi = document.getElementById("y" + idx);
@@ -256,8 +333,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     function getCanvasCoords(e) {
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
+      const scaleX = naturalW / rect.width;
+      const scaleY = naturalH / rect.height;
       return [
         (e.clientX - rect.left) * scaleX,
         (e.clientY - rect.top) * scaleY
@@ -266,13 +343,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     canvas.addEventListener("mousedown", (e) => {
       const [cx, cy] = getCanvasCoords(e);
-      // Checa se clicou perto de um ponto existente para arrastar
-      activeDragIdx = corners.findIndex(pt => Math.hypot(pt[0] - cx, pt[1] - cy) < 25);
+      // Checa se clicou perto de um ponto para arrastar
+      activeDragIdx = corners.findIndex(pt => Math.hypot(pt[0] - cx, pt[1] - cy) < 40);
       if (activeDragIdx === -1) {
         if (corners.length < 4) {
           corners.push([cx, cy]);
-          renderCanvas();
-          if (corners.length === 4) updatePreview();
+          renderOverlay();
+          if (corners.length === 4) syncCorners();
         }
       }
     });
@@ -281,17 +358,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       if (activeDragIdx !== -1) {
         const [cx, cy] = getCanvasCoords(e);
         corners[activeDragIdx] = [
-          Math.max(0, Math.min(canvas.width, cx)),
-          Math.max(0, Math.min(canvas.height, cy))
+          Math.max(0, Math.min(naturalW, cx)),
+          Math.max(0, Math.min(naturalH, cy))
         ];
-        renderCanvas();
+        renderOverlay();
       }
     });
 
     window.addEventListener("mouseup", () => {
       if (activeDragIdx !== -1) {
         activeDragIdx = -1;
-        if (corners.length === 4) updatePreview();
+        if (corners.length === 4) syncCorners();
       }
     });
 
@@ -301,8 +378,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const y = parseFloat(document.getElementById("y" + idx).value);
       if (!isNaN(x) && !isNaN(y)) {
         corners[idx] = [x, y];
-        renderCanvas();
-        if (corners.length === 4) updatePreview();
+        renderOverlay();
+        if (corners.length === 4) syncCorners();
       }
     }
 
@@ -312,25 +389,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         document.getElementById("x" + i).value = "";
         document.getElementById("y" + i).value = "";
       }
-      renderCanvas();
-      document.getElementById("previewImg").src = "";
+      renderOverlay();
+      syncCorners();
     }
 
-    function updatePreview() {
-      if (corners.length !== 4) return;
+    function syncCorners() {
       const orientation = document.getElementById("orientationSelect").value;
-      fetch("/api/preview", {
+      fetch("/api/set_corners", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ corners, orientation })
-      })
-      .then(r => r.json())
-      .then(data => {
-        if (data.image) {
-          document.getElementById("previewImg").src = "data:image/jpeg;base64," + data.image;
+      }).then(() => {
+        if (!isLive) {
+          previewImg.src = "/api/snapshot_warped?t=" + Date.now();
         }
-      })
-      .catch(err => console.error("Erro no preview:", err));
+      });
     }
 
     function saveCalibration() {
@@ -342,10 +415,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       fetch("/api/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          corners: corners,
-          orientation: orientation
-        })
+        body: JSON.stringify({ corners, orientation })
       })
       .then(r => r.json())
       .then(res => {
@@ -355,7 +425,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           showAlert("Erro ao salvar: " + res.error, false);
         }
       })
-      .catch(err => showAlert("Falha de rede ao salvar: " + err, false));
+      .catch(err => showAlert("Falha de rede: " + err, false));
     }
 
     function saveReference() {
@@ -367,7 +437,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       .then(r => r.json())
       .then(res => {
         if (res.success) {
-          showAlert("Imagem de referência (tabuleiro vazio) salva em reference_empty.png!");
+          showAlert("Referência do tabuleiro vazio gravada em <strong>reference_empty.png</strong>!");
         } else {
           showAlert("Erro ao gravar referência: " + res.error, false);
         }
@@ -377,22 +447,40 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     function testDetection() {
       const info = document.getElementById("detectionInfo");
+      const thresh = parseFloat(document.getElementById("thresholdSlider").value);
       info.style.display = "block";
-      info.textContent = "Analisando ocupação das casas...";
-      fetch("/api/detect", { method: "POST" })
+      info.innerHTML = "<em>Analisando imagem em relação ao tabuleiro vazio...</em>";
+
+      fetch("/api/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threshold: thresh })
+      })
       .then(r => r.json())
       .then(res => {
         if (res.success) {
-          const occ = res.occupied_squares.join(", ") || "Nenhuma peça detectada";
-          info.innerHTML = `<strong>Casas Ocupadas:</strong> ${occ}<br><strong>Confiança:</strong> ${(res.confidence * 100).toFixed(1)}%`;
-          showAlert("Detecção de ocupação concluída!");
+          if (res.annotated_image) {
+            // Mostra o frame com as caixas verdes anotadas no painel da direita
+            previewImg.src = "data:image/jpeg;base64," + res.annotated_image;
+          }
+          const occ = res.occupied_squares.length > 0
+            ? res.occupied_squares.join(", ")
+            : "<strong style='color:#34d399;'>Nenhuma peça detectada (Tabuleiro 100% Vazio)</strong>";
+          info.innerHTML = `
+            <strong>Casas Ocupadas:</strong> ${occ}<br>
+            <strong>Total:</strong> ${res.occupied_squares.length} peça(s) detectada(s)<br>
+            <strong>Limiar MAD usado:</strong> ${thresh.toFixed(2)} | <strong>Confiança:</strong> ${(res.confidence * 100).toFixed(1)}%
+          `;
+          showAlert(res.occupied_squares.length === 0
+            ? "Tabuleiro reconhecido como VAZIO com sucesso!"
+            : `Detectadas ${res.occupied_squares.length} peças! Veja as marcações na imagem à direita.`);
         } else {
-          info.textContent = "Erro na detecção: " + res.error;
-          showAlert("Falha na detecção: " + res.error, false);
+          info.innerHTML = "<span style='color:#fca5a5;'>Erro: " + res.error + "</span>";
+          showAlert(res.error, false);
         }
       })
       .catch(err => {
-        info.textContent = "Erro de rede: " + err;
+        info.innerHTML = "<span style='color:#fca5a5;'>Erro de conexão: " + err + "</span>";
       });
     }
 
@@ -403,9 +491,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         if (data.calibration && data.calibration.board_corners && data.calibration.board_corners.length === 4) {
           corners = data.calibration.board_corners;
           document.getElementById("orientationSelect").value = data.calibration.board_orientation || "normal";
-          renderCanvas();
-          updatePreview();
-          showAlert("Calibração anterior carregada.");
+          renderOverlay();
+          syncCorners();
+          showAlert("Calibração existente carregada do JSON.");
         } else {
           showAlert("Nenhuma calibração anterior encontrada.", false);
         }
@@ -413,7 +501,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
 
     window.onload = function() {
-      fetchSnapshot();
       reloadSaved();
     };
   </script>
@@ -436,11 +523,23 @@ class WebCalibratorApp:
         self.last_frame: Optional[np.ndarray] = None
         self.camera: Optional[CameraController] = None
 
+        self.active_corners: list[list[float]] = []
+        self.active_orientation: str = "normal"
+
+        if self.output_file.is_file():
+            try:
+                cal = CalibrationData.load(self.output_file)
+                if cal.is_valid():
+                    self.active_corners = cal.board_corners
+                    self.active_orientation = cal.board_orientation
+            except Exception:
+                pass
+
         if self.static_image_path and Path(self.static_image_path).is_file():
             img = cv2.imread(self.static_image_path)
             if img is not None:
                 self.last_frame = img
-                log.info("Usando imagem estatica: %s", self.static_image_path)
+                log.info("Usando imagem estática: %s", self.static_image_path)
 
         if self.last_frame is None:
             self._init_camera()
@@ -449,10 +548,9 @@ class WebCalibratorApp:
         try:
             self.camera = CameraController(device_index=self.device_index)
             self.camera.open()
-            log.info("Camera aberta no dispositivo %d", self.device_index)
+            log.info("Câmera aberta no dispositivo %d", self.device_index)
         except Exception as e:
-            log.warning("Nao foi possivel abrir a camera (%s). Criando frame simulado.", e)
-            # Imagem de fallback caso a webcam nao esteja conectada
+            log.warning("Não foi possível abrir a câmera (%s). Criando frame simulado.", e)
             self.last_frame = self._generate_synthetic_board()
 
     def _generate_synthetic_board(self) -> np.ndarray:
@@ -467,7 +565,6 @@ class WebCalibratorApp:
             (0, 255, 255),
             2,
         )
-        # Desenha tabuleiro generico centralizado
         bx, by, bw = w // 2 - 250, h // 2 - 250, 500
         for r in range(8):
             for c in range(8):
@@ -506,14 +603,46 @@ class WebCalibratorApp:
         )
         calibrator = PerspectiveCalibrator(cal_data)
         warped = calibrator.correct_perspective(frame)
-
-        # Desenha a grade com labels no tabuleiro
         segmenter = BoardSegmenter(board_orientation=orientation)
         annotated = segmenter.draw_grid(warped)
         return annotated
 
+    def compute_live_warped(self) -> np.ndarray:
+        frame = self.get_frame()
+        with self.lock:
+            corners = list(self.active_corners)
+            orientation = self.active_orientation
+
+        if len(corners) == 4:
+            cal_data = CalibrationData(
+                board_corners=corners,
+                board_orientation=orientation,
+                capture_resolution=[frame.shape[1], frame.shape[0]],
+            )
+            calibrator = PerspectiveCalibrator(cal_data)
+            warped = calibrator.correct_perspective(frame)
+            segmenter = BoardSegmenter(board_orientation=orientation)
+            return segmenter.draw_grid(warped)
+        else:
+            # Mostra o frame original com aviso
+            display = cv2.resize(frame, (640, 640))
+            cv2.putText(
+                display,
+                "Selecione os 4 cantos",
+                (50, 320),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 0, 255),
+                2,
+            )
+            return display
+
     def save_calibration(self, corners: list[list[float]], orientation: str = "normal") -> bool:
         frame = self.get_frame()
+        with self.lock:
+            self.active_corners = corners
+            self.active_orientation = orientation
+
         cal = CalibrationData(
             board_corners=corners,
             board_orientation=orientation,
@@ -532,12 +661,13 @@ class WebCalibratorApp:
         warped = calibrator.correct_perspective(frame)
         ref_path = Path(cfg.VISION_DIR) / "reference_empty.png"
         cv2.imwrite(str(ref_path), warped)
-        log.info("Referencia de tabuleiro vazio gravada em %s", ref_path)
+        log.info("Referência de tabuleiro vazio gravada em %s", ref_path)
         return True
 
-    def detect_occupied(self) -> dict:
+    def detect_occupied(self, threshold: float = cfg.OCCUPIED_DIFF_THRESHOLD) -> dict:
         if not self.output_file.is_file():
-            return {"success": False, "error": "Falta calibracao previa"}
+            return {"success": False, "error": "Falta calibração prévia"}
+
         cal = CalibrationData.load(self.output_file)
         frame = self.get_frame()
         calibrator = PerspectiveCalibrator(cal)
@@ -548,37 +678,71 @@ class WebCalibratorApp:
         if ref_img is None:
             return {
                 "success": False,
-                "error": "Imagem de referência não encontrada! Clique primeiro em 'Gravar Tabuleiro Vazio' com o tabuleiro limpo.",
+                "error": "Imagem de referência não encontrada! Clique primeiro em 'Gravar Tabuleiro Vazio' com o tabuleiro sem peças.",
             }
 
         detector = PieceDetector(
             reference_image=ref_img,
+            occupied_diff_threshold=threshold,
             board_orientation=cal.board_orientation,
         )
         segmenter = BoardSegmenter(board_orientation=cal.board_orientation)
         squares = segmenter.segment_board(warped)
 
+        annotated_board = segmenter.draw_grid(warped)
         occupied = []
         confidences = []
+
+        cols = "ABCDEFGH"
+        rows = "87654321"
+
         for name, roi in squares.items():
             analysis = detector.analyze_square(name, roi)
             if analysis.occupied:
-                occupied.append(f"{name} ({analysis.color or '?'})")
+                color_label = analysis.color or "?"
+                occupied.append(f"{name} ({color_label})")
+
+                # Desenha destaque verde na casa ocupada
+                col_idx = cols.index(name[0])
+                row_idx = rows.index(name[1])
+                x0 = cfg.CEMETERY_REGION_WIDTH_PX + col_idx * 80
+                y0 = row_idx * 80
+                cv2.rectangle(
+                    annotated_board,
+                    (x0 + 4, y0 + 4),
+                    (x0 + 76, y0 + 76),
+                    (0, 255, 0),
+                    3,
+                )
+                tag = f"{color_label[0].upper()}"
+                cv2.putText(
+                    annotated_board,
+                    tag,
+                    (x0 + 26, y0 + 52),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9,
+                    (0, 255, 0),
+                    2,
+                )
             confidences.append(analysis.confidence)
 
         avg_conf = float(np.mean(confidences)) if confidences else 1.0
+
+        # Codifica imagem anotada em base64 para exibir no browser
+        ret, buf = cv2.imencode(".jpg", annotated_board, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        b64_annotated = base64.b64encode(buf).decode("utf-8") if ret else None
+
         return {
             "success": True,
             "occupied_squares": occupied,
             "confidence": round(avg_conf, 3),
-            "reference_used": True,
+            "annotated_image": b64_annotated,
         }
 
 
 def make_handler(app: WebCalibratorApp):
     class RequestHandler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
-            # Silencia logs repetitivos de polling
             return
 
         def do_GET(self):
@@ -591,7 +755,7 @@ def make_handler(app: WebCalibratorApp):
 
             elif parsed.path == "/api/snapshot":
                 frame = app.get_frame()
-                ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 if ret:
                     self.send_response(200)
                     self.send_header("Content-Type", "image/jpeg")
@@ -599,7 +763,19 @@ def make_handler(app: WebCalibratorApp):
                     self.end_headers()
                     self.wfile.write(buf.tobytes())
                 else:
-                    self.send_error(500, "Falha na codificacao da imagem")
+                    self.send_error(500, "Erro ao codificar frame")
+
+            elif parsed.path == "/api/snapshot_warped":
+                preview = app.compute_live_warped()
+                ret, buf = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if ret:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    self.wfile.write(buf.tobytes())
+                else:
+                    self.send_error(500, "Erro ao codificar preview")
 
             elif parsed.path == "/api/status":
                 cal_data = None
@@ -622,15 +798,14 @@ def make_handler(app: WebCalibratorApp):
                 )
 
             elif parsed.path == "/stream":
+                # Stream ao vivo da câmera
                 self.send_response(200)
-                self.send_header(
-                    "Content-Type", "multipart/x-mixed-replace; boundary=frame"
-                )
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
                 try:
                     while True:
                         frame = app.get_frame()
-                        ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                        ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                         if ret:
                             self.wfile.write(b"--frame\r\n")
                             self.send_header("Content-Type", "image/jpeg")
@@ -638,7 +813,27 @@ def make_handler(app: WebCalibratorApp):
                             self.end_headers()
                             self.wfile.write(buf.tobytes())
                             self.wfile.write(b"\r\n")
-                        time.sleep(0.06)
+                        time.sleep(0.04)  # ~25 FPS
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            elif parsed.path == "/stream_warped":
+                # Stream ao vivo do tabuleiro retificado
+                self.send_response(200)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                try:
+                    while True:
+                        warped = app.compute_live_warped()
+                        ret, buf = cv2.imencode(".jpg", warped, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                        if ret:
+                            self.wfile.write(b"--frame\r\n")
+                            self.send_header("Content-Type", "image/jpeg")
+                            self.send_header("Content-Length", str(len(buf)))
+                            self.end_headers()
+                            self.wfile.write(buf.tobytes())
+                            self.wfile.write(b"\r\n")
+                        time.sleep(0.07)  # ~14 FPS
                 except (BrokenPipeError, ConnectionResetError):
                     pass
             else:
@@ -654,22 +849,16 @@ def make_handler(app: WebCalibratorApp):
             except Exception:
                 data = {}
 
-            if parsed.path == "/api/preview":
+            if parsed.path == "/api/set_corners":
                 corners = data.get("corners", [])
                 orientation = data.get("orientation", "normal")
-                preview = app.compute_preview(corners, orientation)
-                if preview is not None:
-                    ret, buf = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    b64 = base64.b64encode(buf).decode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"image": b64}).encode("utf-8"))
-                else:
-                    self.send_response(400)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(b'{"error": "Cantos invalidos"}')
+                with app.lock:
+                    app.active_corners = corners
+                    app.active_orientation = orientation
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"success": true}')
 
             elif parsed.path == "/api/save":
                 corners = data.get("corners", [])
@@ -694,7 +883,8 @@ def make_handler(app: WebCalibratorApp):
                 self.wfile.write(json.dumps({"success": success}).encode("utf-8"))
 
             elif parsed.path == "/api/detect":
-                res = app.detect_occupied()
+                threshold = float(data.get("threshold", cfg.OCCUPIED_DIFF_THRESHOLD))
+                res = app.detect_occupied(threshold=threshold)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -708,7 +898,6 @@ def make_handler(app: WebCalibratorApp):
 def get_ip_addresses() -> list[str]:
     ips = []
     try:
-        # Obtem IP de saida
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ips.append(s.getsockname()[0])
@@ -739,7 +928,7 @@ def main():
 
     ips = get_ip_addresses()
     print("\n" + "=" * 65)
-    print("  🎯 VoiceChess — Calibrador de Câmera Web (Modo Headless)")
+    print("  🎯 VoiceChess — Calibrador de Câmera Web (LIVE VIEW)")
     print("=" * 65)
     print("  Servidor iniciado com sucesso!")
     print("\n  Abra o navegador no seu PC Windows:")
