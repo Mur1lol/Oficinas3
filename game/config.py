@@ -32,6 +32,9 @@ GANTRY_TIMEOUT_S = 180.0  # tempo maximo esperando o ESP32 terminar uma jogada
 # Compensacao de arraste/delay do eletroima (overshoot em mm na direcao do movimento antes de soltar a peca)
 RELEASE_OVERSHOOT_MM = 5.0
 
+# Pausa (em segundos) em cada troca de eixo com o eletroima ligado para a peca nao se soltar por inercia
+AXIS_CHANGE_DELAY_S = 0.5
+
 
 def game_to_gantry(x: float, y: float) -> tuple[float, float]:
     """Coordenada em mm do planner -> coordenada absoluta do ESP32 (mm).

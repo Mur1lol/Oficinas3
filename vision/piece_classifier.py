@@ -32,11 +32,11 @@ log = logging.getLogger(__name__)
 _PIECE_TYPES = ("pawn", "rook", "knight", "bishop", "queen", "king")
 _TEMPLATE_SIZE = 64  # px, reference icon resized to this before scaling
 
-# Amostras reais: a casa e normalizada para 80x80; busca no centro (56x56)
-# com um molde central de 44x44 -> tolera ~6 px de deslocamento da peca.
+# Amostras reais: normalizacao 80x80; busca 32x32 ao redor do centro (40, 40)
+# com molde central de 22x22 -> tolera +/- 5 px de deslocamento da peca.
 _SAMPLE_NORM = 80
-_SEARCH_MARGIN = 12   # (80 - 56) / 2
-_TPL_MARGIN = 18      # (80 - 44) / 2
+_SEARCH_BOX = (24, 56)  # 32x32 search window
+_TPL_BOX = (29, 51)     # 22x22 template window
 
 
 def _prep_square(img: np.ndarray) -> np.ndarray:
@@ -45,6 +45,50 @@ def _prep_square(img: np.ndarray) -> np.ndarray:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     img = cv2.resize(img, (_SAMPLE_NORM, _SAMPLE_NORM), interpolation=cv2.INTER_AREA)
     return cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(img)
+
+
+def _extract_icon(
+    img: np.ndarray, color: Optional[str] = None, radius_mask: float = 12.0
+) -> tuple[np.ndarray, str]:
+    """
+    Normaliza a imagem da casa recortada (80x80) para isolar o icone gravado no disco:
+    1. Mede o anel do corpo do disco (raio 12-16px).
+    2. Determina a polaridade (branca tem disco escuro com icone claro; preta tem
+       disco claro com icone escuro).
+    3. Inverte e subtrai o corpo para que o icone fique sempre brilhante sobre fundo preto.
+    4. Aplica mascara circular (raio 12px) que corta fora a borda do disco e a madeira da casa.
+    """
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
+    gray = cv2.resize(gray, (_SAMPLE_NORM, _SAMPLE_NORM), interpolation=cv2.INTER_AREA)
+
+    h, w = gray.shape
+    cx, cy = w // 2, h // 2
+    Y, X = np.ogrid[:h, :w]
+    dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
+
+    ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
+    split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
+    det_color = color if color in ("white", "black") else ("white" if ring_val < split_thresh else "black")
+
+    if det_color == "black":
+        norm = ring_val - gray.astype(np.float32)
+    else:
+        norm = gray.astype(np.float32) - ring_val
+    norm = np.maximum(0.0, norm)
+
+    mask = (dist <= radius_mask).astype(np.float32)
+    norm = norm * mask
+
+    max_val = norm.max()
+    if max_val > 5.0:
+        norm = (norm / max_val * 255.0).astype(np.uint8)
+    else:
+        norm = norm.astype(np.uint8)
+
+    return norm, det_color
 
 
 def _edge_map(gray: np.ndarray) -> np.ndarray:
@@ -95,16 +139,20 @@ class PieceClassifier:
         self._templates: dict[str, dict[str, list[np.ndarray]]] = {
             "white": {}, "black": {},
         }
-        # {color: {piece_type: [molde cinza 44x44, ja com as 4 rotacoes]}}
+        # {color: {piece_type: [moldes normalizados]}}
         self._samples: dict[str, dict[str, list[np.ndarray]]] = {
             "white": {}, "black": {},
         }
+        # Moldes agrupados por tipo (compartilhados entre brancas e pretas com todas as rotacoes)
+        self._pooled_samples: dict[str, list[np.ndarray]] = {}
+        self._sample_counts: dict[str, int] = {}
+
         self._load()
         self._load_samples()
 
     @property
     def has_samples(self) -> bool:
-        return any(self._samples[c] for c in self._samples)
+        return any(self._pooled_samples.values())
 
     @property
     def is_ready(self) -> bool:
@@ -113,9 +161,8 @@ class PieceClassifier:
         return all(len(v) == len(_PIECE_TYPES) for v in self._templates.values())
 
     def sample_counts(self) -> dict[str, int]:
-        """Numero de amostras (sem contar rotacoes) por '<tipo>_<cor>'."""
-        return {f"{p}_{c}": len(v) // 4
-                for c, d in self._samples.items() for p, v in d.items()}
+        """Numero de fotos de amostra por '<tipo>_<cor>'."""
+        return dict(self._sample_counts)
 
     # ------------------------------------------------------------------
 
@@ -141,42 +188,52 @@ class PieceClassifier:
         """Le vision/pieces/samples/<tipo>_<cor>/*.png (casas recortadas pela camera)."""
         if not self._samples_dir.is_dir():
             return
+        angles = list(range(0, 360, 15))  # 24 angulos de rotacao para cobrir qualquer orientacao
         for sub in sorted(self._samples_dir.iterdir()):
             if not sub.is_dir() or "_" not in sub.name:
                 continue
-            ptype, color = sub.name.lower().split("_", 1)
-            if ptype not in _PIECE_TYPES or color not in self._samples:
+            parts = sub.name.lower().split("_", 1)
+            if len(parts) != 2:
                 continue
-            for f in sorted(sub.glob("*.png")) + sorted(sub.glob("*.jpg")):
+            ptype, color = parts
+            if ptype not in _PIECE_TYPES or color not in ("white", "black"):
+                continue
+            files = sorted(sub.glob("*.png")) + sorted(sub.glob("*.jpg"))
+            self._sample_counts[f"{ptype}_{color}"] = len(files)
+            for f in files:
                 img = cv2.imread(str(f))
                 if img is None:
                     continue
-                sq = _prep_square(img)
-                m = _TPL_MARGIN
-                tpl = sq[m:_SAMPLE_NORM - m, m:_SAMPLE_NORM - m]
-                # Peca pode estar girada em qualquer direcao vista de cima
-                for k in range(4):
-                    self._samples[color].setdefault(ptype, []).append(
-                        np.ascontiguousarray(np.rot90(tpl, k)))
+                icon, _ = _extract_icon(img, color=color)
+                # Molde central 22x22 isolando o simbolo
+                tpl = icon[_TPL_BOX[0]:_TPL_BOX[1], _TPL_BOX[0]:_TPL_BOX[1]]
+                h_t, w_t = tpl.shape
+                for ang in angles:
+                    if ang == 0:
+                        r_tpl = tpl
+                    else:
+                        M = cv2.getRotationMatrix2D((w_t / 2.0, h_t / 2.0), ang, 1.0)
+                        r_tpl = cv2.warpAffine(tpl, M, (w_t, h_t))
+                    self._samples[color].setdefault(ptype, []).append(r_tpl)
+                    self._pooled_samples.setdefault(ptype, []).append(r_tpl)
         if self.has_samples:
             log.info("[Classifier] Real samples loaded: %s", self.sample_counts())
 
     def _classify_samples(
         self, roi: np.ndarray, color: Optional[str]
     ) -> tuple[Optional[str], float]:
-        sq = _prep_square(roi)
-        m = _SEARCH_MARGIN
-        search = sq[m:_SAMPLE_NORM - m, m:_SAMPLE_NORM - m]
+        icon, det_color = _extract_icon(roi, color=color)
+        # Janela de busca 32x32 ao redor do centro (40, 40) -> tolera +/- 5 px de desalinhamento
+        search = icon[_SEARCH_BOX[0]:_SEARCH_BOX[1], _SEARCH_BOX[0]:_SEARCH_BOX[1]]
 
-        # Usa so a cor detectada se houver amostras dela; senao procura em todas
-        colors = [color] if color in self._samples and self._samples[color] else \
-            [c for c in self._samples if self._samples[c]]
         scores: dict[str, float] = {}
-        for c in colors:
-            for ptype, tpls in self._samples[c].items():
-                best = max(float(cv2.matchTemplate(search, t, cv2.TM_CCOEFF_NORMED).max())
-                           for t in tpls)
-                scores[ptype] = max(scores.get(ptype, -1.0), best)
+        for ptype in _PIECE_TYPES:
+            tpls = self._pooled_samples.get(ptype)
+            if not tpls:
+                continue
+            best = max(float(cv2.matchTemplate(search, t, cv2.TM_CCOEFF_NORMED).max()) for t in tpls)
+            scores[ptype] = best
+
         if not scores:
             return None, 0.0
 
@@ -184,7 +241,7 @@ class PieceClassifier:
         best_type, best = ranked[0]
         second = ranked[1][1] if len(ranked) > 1 else 0.0
         margin = best - second
-        confidence = float(np.clip(0.5 * best + 2.5 * margin, 0.0, 1.0))
+        confidence = float(np.clip(0.6 * best + 2.0 * margin, 0.0, 1.0))
         if best < cfg.PIECE_SAMPLE_MIN_SCORE or margin < cfg.PIECE_SAMPLE_MIN_MARGIN:
             return None, confidence
         return best_type, confidence

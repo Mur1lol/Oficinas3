@@ -333,26 +333,38 @@ class PieceDetector:
 
         Method
         ------
-        Convert to HSV. Focus on the centre 60% of the ROI to avoid board
-        edge bleed. Compute the mean V (brightness) channel.  Pieces brighter
-        than PIECE_BRIGHTNESS_THRESHOLD are white; darker are black.
+        For circular puck pieces:
+        Evaluates the puck body ring (radius 12 to 16 px) and center icon (radius <= 8 px).
+        In the physical set:
+        - White player: Dark body puck (mean ~85) with bright icon (contrast > 0).
+        - Black player: Light body puck (mean ~138) with dark icon (contrast < 0).
+        Threshold at PIECE_PUCK_SPLIT_THRESHOLD (112) cleanly separates white from
+        black pieces without being distorted by the underlying square color.
         """
-        h, w = roi.shape[:2]
-        # Centre crop (60% of each dimension)
-        margin_y = int(h * 0.2)
-        margin_x = int(w * 0.2)
-        centre = roi[margin_y: h - margin_y, margin_x: w - margin_x]
+        if roi.ndim == 3:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = roi
+        gray = cv2.resize(gray, (80, 80))
+        h, w = gray.shape
+        cx, cy = w // 2, h // 2
+        Y, X = np.ogrid[:h, :w]
+        dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
 
-        hsv = cv2.cvtColor(centre, cv2.COLOR_BGR2HSV)
-        mean_v = float(np.mean(hsv[:, :, 2]))    # brightness channel
+        ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
+        icon_val = float(gray[dist <= 8].mean())
+        contrast = icon_val - ring_val
 
-        if mean_v >= self._bright_thr:
+        split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
+        if ring_val < split_thresh:
             color = "white"
-            confidence = min(1.0, (mean_v - self._bright_thr) / (255 - self._bright_thr))
+            conf = min(1.0, 0.6 + abs(split_thresh - ring_val) / 50.0)
+            if contrast > 0:
+                conf = min(1.0, conf + 0.1)
         else:
             color = "black"
-            confidence = min(1.0, (self._bright_thr - mean_v) / self._bright_thr)
+            conf = min(1.0, 0.6 + abs(ring_val - split_thresh) / 50.0)
+            if contrast < 0:
+                conf = min(1.0, conf + 0.1)
 
-        # Ensure at least 0.5 confidence even near the threshold
-        confidence = 0.5 + confidence * 0.5
-        return color, confidence
+        return color, float(conf)

@@ -92,35 +92,37 @@ def main() -> None:
                 black_count += 1
 
     # Renderiza Tabuleiro ASCII
+    # Renderiza Tabuleiro ASCII
     cols = "ABCDEFGH"
     rows = "87654321"
+    type_letters = {"pawn": "P", "rook": "R", "knight": "N", "bishop": "B", "queen": "Q", "king": "K"}
 
-    print("\n" + "=" * 45)
-    print("      TABULEIRO RECONHECIDO (VISÃO)")
-    print("=" * 45)
-    print("     A   B   C   D   E   F   G   H")
-    print("   +---+---+---+---+---+---+---+---+")
+    print("\n" + "=" * 53)
+    print("           TABULEIRO RECONHECIDO (VISÃO)")
+    print("=" * 53)
+    print("      A    B    C    D    E    F    G    H")
+    print("   +----+----+----+----+----+----+----+----+")
     for r in rows:
         line = f" {r} |"
         for c in cols:
             sq = f"{c}{r}"
             st = results.get(sq)
             if not st or not st.occupied:
-                char = " "
-            elif st.color == "white":
-                char = "W"
-            elif st.color == "black":
-                char = "B"
+                char = "  "
             else:
-                char = "O"
+                col_c = (st.color or "?")[0].upper()
+                pt_c = type_letters.get(st.piece, "?")
+                char = f"{col_c}{pt_c}"
             line += f" {char} |"
         print(line + f" {r}")
-        print("   +---+---+---+---+---+---+---+---+")
-    print("     A   B   C   D   E   F   G   H\n")
+        print("   +----+----+----+----+----+----+----+----+")
+    print("      A    B    C    D    E    F    G    H\n")
 
+    identified = sum(1 for st in results.values() if st.occupied and st.piece)
     print(f"Total de peças detectadas: {occupied_count}")
     print(f"  - Peças Brancas (W): {white_count}")
     print(f"  - Peças Pretas  (B): {black_count}")
+    print(f"  - Identificadas com tipo : {identified}/{occupied_count}")
     print(f"  - Casas Vazias     : {64 - occupied_count}\n")
 
 

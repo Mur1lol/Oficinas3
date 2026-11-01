@@ -43,7 +43,11 @@ PIECE_SAMPLES_DIR: str = str(VISION_DIR / "pieces" / "samples")
 PIECE_SAMPLE_MIN_SCORE: float = 0.50
 
 # Diferenca minima entre o melhor e o segundo melhor tipo
-PIECE_SAMPLE_MIN_MARGIN: float = 0.04
+PIECE_SAMPLE_MIN_MARGIN: float = 0.015
+
+# Limiar de brilho medio do anel do disco (raio 12-16px) separando pecas brancas de pretas.
+# No conjunto fisico: pecas brancas (disco escuro) tem anel ~85; pretas (disco claro) ~138.
+PIECE_PUCK_SPLIT_THRESHOLD: float = 112.0
 
 # ---------------------------------------------------------------------------
 # Camera capture

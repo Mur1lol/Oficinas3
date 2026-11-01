@@ -24,6 +24,7 @@ class Gantry {
   static constexpr float V_INICIAL    = 5.0f;    // mm/s no início/fim da rampa
   static constexpr float RECUO_HOME_X = 0.0f;    // Recuo pós-homing no eixo X (mm)
   static constexpr float RECUO_HOME_Y = 0.0f;   // Recuo pós-homing no eixo Y (mm)
+  static constexpr uint32_t PAUSA_TROCA_EIXO_MS = 500; // Pausa (ms) ao trocar de eixo com o eletroímã ligado
 
   Gantry(uint8_t aStep = 26, uint8_t aDir = 27,
          uint8_t bStep = 18, uint8_t bDir = 19,
@@ -207,6 +208,10 @@ class Gantry {
       motores_.habilitar(true);
     }
 
+    float prevCarryDx = 0.0f;
+    float prevCarryDy = 0.0f;
+    bool hasCarryMov = false;
+
     for (size_t i = 0; i < tamanho; i++) {
       // Ajusta o eletroímã para o passo atual
       if (ima[i] > 0) {
@@ -215,11 +220,37 @@ class Gantry {
         eletroima_.desligar();
       }
 
+      float dx = x[i] - posX();
+      float dy = y[i] - posY();
+      bool movedX = fabs(dx) > 0.05f;
+      bool movedY = fabs(dy) > 0.05f;
+
+      // Se o ímã está ligado e houve troca de eixo carregando a peça
+      if (ima[i] > 0 && (movedX || movedY) && hasCarryMov) {
+        bool trocaEixo = (movedX && fabs(prevCarryDy) > 0.05f && fabs(prevCarryDx) <= 0.05f) ||
+                         (movedY && fabs(prevCarryDx) > 0.05f && fabs(prevCarryDy) <= 0.05f);
+        if (trocaEixo && PAUSA_TROCA_EIXO_MS > 0) {
+          delay(PAUSA_TROCA_EIXO_MS);
+        }
+      }
+
       // Desloca para a posição do passo
       ResultadoMovimento res = irPara(x[i], y[i]);
       if (res != MOV_OK && res != MOV_BATEU_FIM_CURSO) {
         eletroima_.desligar();
         return res;
+      }
+
+      if (movedX || movedY) {
+        if (ima[i] > 0) {
+          prevCarryDx = dx;
+          prevCarryDy = dy;
+          hasCarryMov = true;
+        } else {
+          hasCarryMov = false;
+          prevCarryDx = 0.0f;
+          prevCarryDy = 0.0f;
+        }
       }
     }
     return MOV_OK;
