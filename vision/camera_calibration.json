@@ -1,20 +1,20 @@
 {
   "board_corners": [
     [
-      1084,
-      663
+      155,
+      30
     ],
     [
-      334,
-      671
+      580,
+      30
     ],
     [
-      388,
-      71
+      575,
+      450
     ],
     [
-      999,
-      37
+      155,
+      450
     ]
   ],
   "left_cemetery_raw": null,
@@ -22,7 +22,7 @@
   "board_orientation": "normal",
   "camera_device": 0,
   "capture_resolution": [
-    1280,
-    960
+    640,
+    480
   ]
 }
