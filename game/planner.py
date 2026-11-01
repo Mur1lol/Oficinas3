@@ -328,3 +328,166 @@ class MovePlanner:
         self._rebuild()
         if self.return_home:
             self._navigate_phys(self.home_phys())
+
+    def plan_reorganize(self, color: bool | None = None) -> Plan:
+        """
+        Organiza as pecas de volta as casas iniciais.
+        color=None: organiza ambos os lados (todas as 32 pecas).
+        color=chess.BLACK ou chess.WHITE: organiza apenas a cor especificada.
+        """
+        self._snapshot = (self.board.copy(), dict(self.cem_occ), self.robot_phys, self.carrying)
+        self._steps = []
+
+        if self.return_home:
+            self.robot_phys = self.home_phys()
+            self._emit(0.0, 0.0, 0)
+
+        # 1. Alvos de cada cor:
+        # Pretas: Linha 0 (Rank 8) Nobres, Linha 1 (Rank 7) Peoes
+        black_nobles = {
+            (0, 10): chess.ROOK, (0, 9): chess.KNIGHT, (0, 8): chess.BISHOP, (0, 7): chess.QUEEN,
+            (0, 6): chess.KING, (0, 5): chess.BISHOP, (0, 4): chess.KNIGHT, (0, 3): chess.ROOK,
+        }
+        black_pawns = {(1, c): chess.PAWN for c in range(3, 11)}
+
+        # Brancas: Linha 6 (Rank 2) Peoes, Linha 7 (Rank 1) Nobres
+        white_pawns = {(6, c): chess.PAWN for c in range(3, 11)}
+        white_nobles = {
+            (7, 10): chess.ROOK, (7, 9): chess.KNIGHT, (7, 8): chess.BISHOP, (7, 7): chess.QUEEN,
+            (7, 6): chess.KING, (7, 5): chess.BISHOP, (7, 4): chess.KNIGHT, (7, 3): chess.ROOK,
+        }
+
+        all_targets: dict[tuple[int, int], tuple[bool, int]] = {}
+        if color in (None, chess.BLACK):
+            for cell, pt in black_nobles.items():
+                all_targets[cell] = (chess.BLACK, pt)
+            for cell, pt in black_pawns.items():
+                all_targets[cell] = (chess.BLACK, pt)
+        if color in (None, chess.WHITE):
+            for cell, pt in white_pawns.items():
+                all_targets[cell] = (chess.WHITE, pt)
+            for cell, pt in white_nobles.items():
+                all_targets[cell] = (chess.WHITE, pt)
+
+        def find_empty_temp_square() -> tuple[int, int]:
+            for r in range(2, 6):
+                for c in range(COL_BOARD_START, COL_BOARD_END + 1):
+                    if self.logic.grid[r][c] == EMPTY:
+                        return (r, c)
+            raise PlanningError("Nenhuma casa livre para manobra encontrada.")
+
+        # Se organizando apenas uma cor, limpa pecas da outra cor que estejam nas fileiras alvo
+        if color is not None:
+            target_rows = (0, 1) if color == chess.BLACK else (6, 7)
+            for sq in chess.SQUARES:
+                p = self.board.piece_at(sq)
+                if p and p.color != color:
+                    cell = square_to_cell(sq)
+                    if cell[0] in target_rows:
+                        temp = find_empty_temp_square()
+                        self._carry(cell, temp)
+                        self.board.remove_piece_at(sq)
+                        temp_sq = chess.square(10 - temp[1], 7 - temp[0])
+                        self.board.set_piece_at(temp_sq, p)
+
+        # 2. Localizar todas as pecas no tabuleiro e no cemiterio
+        pieces = []
+        pid = 0
+        for sq in chess.SQUARES:
+            p = self.board.piece_at(sq)
+            if p and (color is None or p.color == color):
+                pieces.append({
+                    "id": pid,
+                    "color": p.color,
+                    "type": p.piece_type,
+                    "curr": square_to_cell(sq),
+                    "is_cem": False,
+                    "target": None,
+                })
+                pid += 1
+
+        for slot, p_type in list(self.cem_occ.items()):
+            if slot[1] in (COL_CEM_DIR_PEAO, COL_CEM_DIR_NOBRE):
+                slot_color = chess.BLACK
+            elif slot[1] in (COL_CEM_ESQ_NOBRE, COL_CEM_ESQ_PEAO):
+                slot_color = chess.WHITE
+            else:
+                continue
+            if color is None or slot_color == color:
+                pieces.append({
+                    "id": pid,
+                    "color": slot_color,
+                    "type": p_type,
+                    "curr": slot,
+                    "is_cem": True,
+                    "target": None,
+                })
+                pid += 1
+
+        # 3. Atribuicao dos alvos:
+        unassigned = dict(all_targets)
+        for p in pieces:
+            if not p["is_cem"] and p["curr"] in unassigned:
+                tc, tt = unassigned[p["curr"]]
+                if tc == p["color"] and tt == p["type"]:
+                    p["target"] = p["curr"]
+                    del unassigned[p["curr"]]
+
+        for p in pieces:
+            if p["target"] is None:
+                matched = None
+                for tgt, (tc, tt) in unassigned.items():
+                    if tc == p["color"] and tt == p["type"]:
+                        matched = tgt
+                        break
+                if matched is None:
+                    raise PlanningError(f"Nao foi possivel alocar alvo para peca {p['type']}.")
+                p["target"] = matched
+                del unassigned[matched]
+
+        # 4. Mover pecas para os alvos
+        home_rows = (0, 1, 6, 7) if color is None else ((0, 1) if color == chess.BLACK else (6, 7))
+        while True:
+            pieces_to_move = [p for p in pieces if p["curr"] != p["target"]]
+            if not pieces_to_move:
+                break
+
+            moved_any = False
+            for p in pieces_to_move:
+                tgt = p["target"]
+                if self.logic.grid[tgt[0]][tgt[1]] == EMPTY:
+                    self._carry(p["curr"], tgt)
+                    if p["is_cem"]:
+                        del self.cem_occ[p["curr"]]
+                        p["is_cem"] = False
+                    p["curr"] = tgt
+                    moved_any = True
+                    break
+
+            if not moved_any:
+                p = next((p for p in pieces_to_move if p["curr"][0] in home_rows), pieces_to_move[0])
+                temp = find_empty_temp_square()
+                self._carry(p["curr"], temp)
+                if p["is_cem"]:
+                    del self.cem_occ[p["curr"]]
+                    p["is_cem"] = False
+                p["curr"] = temp
+
+        # 5. Atualiza o estado do tabuleiro de xadrez
+        if color is None:
+            self.board = chess.Board()
+        else:
+            for sq in chess.SQUARES:
+                p = self.board.piece_at(sq)
+                if p and p.color == color:
+                    self.board.remove_piece_at(sq)
+            for tgt, (tc, tt) in all_targets.items():
+                sq = chess.square(10 - tgt[1], 7 - tgt[0])
+                self.board.set_piece_at(sq, chess.Piece(tt, tc))
+
+        self.carrying = False
+        self._rebuild()
+        if self.return_home:
+            self._navigate_phys(self.home_phys())
+
+        return Plan(list(self._steps))

@@ -14,6 +14,12 @@ Regras de LED
                 (LED do lado do jogador).
     - VERDE   : lance valido; no LED do lado de quem joga, ate o ESP32 responder "ok".
     - VERMELHO: lance invalido; pisca 3 s no LED do lado do jogador.
+    - AMARELO :
+        - Cheque: LED do lado sob xeque acende por 1.5s enquanto o speaker fala "Check!".
+        - Empate/Afogamento: LEDs de ambos os lados piscam em amarelo durante o aviso.
+    - FIM DE JOGO COM VENCEDOR:
+        - Vencedor: pisca alternando varias cores (verde, azul, ciano, amarelo, magenta, branco - sem vermelho).
+        - Perdedor: pisca em vermelho.
 """
 
 from __future__ import annotations
@@ -51,6 +57,8 @@ class VoiceChessGame:
         self._engine: chess.engine.SimpleEngine | None = None
         self._gantry_connected = False
         self._last_confirm_lines: tuple[str, ...] = ()
+        self._first_run = True
+        self._has_completed_game = False
         self.listener = listener_factory(self._on_listening, self._on_confirm,
                                          self.speaker.wait_idle)
 
@@ -134,6 +142,9 @@ class VoiceChessGame:
         elif isinstance(command, ActionCommand) and command.action == "RESIGN_GAME":
             speech = "resign game. Say yes or no."
             lines = ("RESIGN GAME?", "BLACK WINS", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "ORGANIZE_BOARD":
+            speech = "organize board. Say yes or no."
+            lines = ("ORGANIZE BOARD?", "RESET ALL PIECES", "SAY: YES OR NO", "")
         else:
             speech = f"{command}. Say yes or no."
             lines = ("CONFIRM?", f"{command}", "SAY: YES OR NO", "")
@@ -147,22 +158,58 @@ class VoiceChessGame:
 
     def _idle(self) -> None:
         self.leds.off()
-        self.lcd.show(
-            "=== VOICE CHESS ===",
-            "SAY: MAGNUS",
-            "START NEW GAME",
-            "TO BEGIN PLAY",
-        )
-        self.speaker.say(
-            "Welcome to Voice Chess. You can start a new game by using the wake word Magnus, "
-            "followed by the command Start New Game.",
-            wait=True,
-        )
+        if self._first_run:
+            self.lcd.show(
+                "=== VOICE CHESS ===",
+                "SAY: MAGNUS",
+                "START NEW GAME",
+                "TO BEGIN PLAY",
+            )
+            self.speaker.say(
+                "Welcome to Voice Chess. You can start a new game by using the wake word Magnus, "
+                "followed by the command Start New Game.",
+                wait=True,
+            )
+            self._first_run = False
+        else:
+            self.lcd.show(
+                "START NEW GAME?",
+                "SAY: MAGNUS",
+                "START NEW GAME",
+                "OR ORGANIZE BOARD",
+            )
+            self.speaker.say(
+                "Would you like to start a new game? Say Magnus start new game.",
+                wait=True,
+            )
+
         while True:
             result = self.listener.listen()
             if (result.confirmed and isinstance(result.command, ActionCommand)
                     and result.command.action == "NEW_GAME"):
                 return
+            if (result.confirmed and isinstance(result.command, ActionCommand)
+                    and result.command.action == "ORGANIZE_BOARD"):
+                if not self._has_completed_game:
+                    self.lcd.show(
+                        "NOT AVAILABLE",
+                        "FINISH GAME FIRST",
+                        "SAY: MAGNUS",
+                        "START NEW GAME",
+                    )
+                    self.speaker.say(
+                        "Board organization is only available after finishing a game.",
+                        wait=True,
+                    )
+                    continue
+                self._organize_board()
+                self.lcd.show(
+                    "START NEW GAME?",
+                    "SAY: MAGNUS",
+                    "START NEW GAME",
+                    "OR ORGANIZE BOARD",
+                )
+                continue
             if result.command and not result.confirmed:
                 self.lcd.show(
                     "=== VOICE CHESS ===",
@@ -174,7 +221,7 @@ class VoiceChessGame:
             elif result.wake_detected and not result.command:
                 self._command_not_recognized()
                 self.lcd.show(
-                    "=== VOICE CHESS ===",
+                    "START NEW GAME?",
                     "SAY: MAGNUS",
                     "START NEW GAME",
                     "TO BEGIN PLAY",
@@ -276,19 +323,32 @@ class VoiceChessGame:
             if board.turn == PLAYER_COLOR:
                 move = self._player_move()
                 if move is None:                               # desistiu
+                    self._has_completed_game = True
                     self.lcd.show("YOU RESIGNED", "BLACK WINS")
-                    self.speaker.say("You resigned. Black wins.")
+                    self.speaker.say("You resigned. Black wins.", wait=False)
+                    self.leds.celebrate(COMPUTER, PLAYER, seconds=5.0)
+                    self.speaker.wait_idle()
                     return
                 self._execute(move, PLAYER)
             else:
                 self._execute(self._computer_move(), COMPUTER)
             board = self.planner.board
 
+        self._has_completed_game = True
         speech, lines = phrases.game_result(board)
-        self.leds.off()
         self.lcd.show(*lines)
-        self.speaker.say(speech)
-        time.sleep(3)
+        if board.is_checkmate():
+            winner_color = chess.BLACK if board.turn == chess.WHITE else chess.WHITE
+            winner_side = PLAYER if winner_color == PLAYER_COLOR else COMPUTER
+            loser_side = COMPUTER if winner_side == PLAYER else PLAYER
+            self.speaker.say(speech, wait=False)
+            self.leds.celebrate(winner_side, loser_side, seconds=5.0)
+            self.speaker.wait_idle()
+        else:
+            # Empate / afogamento: speaker avisa e leds dos dois lados piscam em amarelo
+            self.speaker.say(speech, wait=False)
+            self.leds.blink_both("yellow", seconds=5.0)
+            self.speaker.wait_idle()
 
     def _player_move(self) -> chess.Move | None:
         """Espera MAGNUS MOVE [FROM] [TO] confirmado. None = jogador desistiu."""
@@ -384,6 +444,40 @@ class VoiceChessGame:
             self.leds.blink(side, "red", cfg.BLINK_ERROR_SECONDS)
             raise GameAbort(f"Gantry: {exc}") from exc
         self.leds.off(side)
+
+        # Cheque: se o movimento gerou uma posicao de cheque (e a partida nao acabou),
+        # o speaker fala "Check!" e o LED do lado em cheque fica amarelo por 1,5 segundos.
+        board = self.planner.board
+        if board.is_check() and not board.is_game_over():
+            in_check_side = PLAYER if board.turn == PLAYER_COLOR else COMPUTER
+            self.lcd.show("CHECK!", f"{in_check_side.upper()} IN CHECK")
+            self.leds.set(in_check_side, "yellow")
+            self.speaker.say("Check!", wait=False)
+            time.sleep(1.5)
+            self.leds.off(in_check_side)
+
+    def _organize_board(self) -> None:
+        """Organiza as pecas de ambos os jogadores de volta as casas iniciais."""
+        self.lcd.show("ORGANIZING BOARD", "PLEASE WAIT...", "RESETTING ALL", "PIECES...")
+        self.speaker.say("Organizing board. Please wait.", wait=False)
+        try:
+            self._connect_gantry()
+            plan = self.planner.plan_reorganize()
+            self.leds.set(PLAYER, "green")
+            self.leds.set(COMPUTER, "green")
+            self.gantry.execute(plan.x, plan.y, plan.eletroima)
+            self.leds.off()
+            self.lcd.show("BOARD ORGANIZED", "ALL PIECES READY", "SAY: MAGNUS", "START NEW GAME")
+            self.speaker.say("Board organized.", wait=True)
+            time.sleep(1.5)
+        except (GantryError, PlanningError) as exc:
+            self.planner.rollback()
+            self.leds.off()
+            self.leds.blink(PLAYER, "red", cfg.BLINK_ERROR_SECONDS)
+            self.leds.blink(COMPUTER, "red", cfg.BLINK_ERROR_SECONDS)
+            self.lcd.show("ORGANIZATION", "FAILED", "SEE TERMINAL", "")
+            self.speaker.say("Failed to organize board.", wait=True)
+            log.error("Erro ao organizar tabuleiro: %s", exc)
 
     def _show_abort(self, message: str) -> None:
         log.error("Partida interrompida: %s", message)

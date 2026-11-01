@@ -57,3 +57,67 @@ def test_overshoot_disabled_when_zero():
 
     assert plan.steps[-2] == (e4_x, e4_y, 1)
     assert plan.steps[-1] == (e4_x, e4_y, 0)
+
+
+def test_reorganize_returns_black_pieces_home():
+    planner = MovePlanner()
+    moves = [
+        "e2e4", "e7e5",
+        "g1f3", "b8c6",
+        "f1c4", "g8f6",
+        "f3g5", "d7d5",
+        "e4d5", "f6d5",
+        "g5f7", "e8f7",
+        "d1f3", "f7e6",
+    ]
+    for m in moves:
+        planner.plan(chess.Move.from_uci(m))
+
+    plan = planner.plan_reorganize(chess.BLACK)
+    assert len(plan.steps) > 0
+
+    # Verify Black cemetery is empty
+    black_cem = {k: v for k, v in planner.cem_occ.items() if k[1] in (0, 1)}
+    assert len(black_cem) == 0
+
+    # Verify rank 7 has 8 Black pawns
+    for sq in range(chess.A7, chess.H7 + 1):
+        p = planner.board.piece_at(sq)
+        assert p is not None
+        assert p.color == chess.BLACK
+        assert p.piece_type == chess.PAWN
+
+    # Verify rank 8 has all 8 Black nobles in standard positions
+    expected_rank8 = [
+        (chess.A8, chess.ROOK), (chess.B8, chess.KNIGHT), (chess.C8, chess.BISHOP),
+        (chess.D8, chess.QUEEN), (chess.E8, chess.KING), (chess.F8, chess.BISHOP),
+        (chess.G8, chess.KNIGHT), (chess.H8, chess.ROOK),
+    ]
+    for sq, pt in expected_rank8:
+        p = planner.board.piece_at(sq)
+        assert p is not None
+        assert p.color == chess.BLACK
+        assert p.piece_type == pt
+
+
+def test_reorganize_both_colors_returns_all_pieces_home():
+    planner = MovePlanner()
+    # Mutual captures
+    moves = ["e2e4", "d7d5", "e4d5", "d8d5", "b1c3", "d5g2", "f1g2"]
+    for m in moves:
+        planner.plan(chess.Move.from_uci(m))
+
+    assert len(planner.cem_occ) > 0  # both sides have captured pieces
+
+    plan = planner.plan_reorganize()  # color=None organizes both
+    assert len(plan.steps) > 0
+
+    # Both cemeteries must be completely empty
+    assert len(planner.cem_occ) == 0
+
+    # Board must match standard starting setup
+    starting = chess.Board()
+    for sq in chess.SQUARES:
+        assert planner.board.piece_at(sq) == starting.piece_at(sq)
+
+

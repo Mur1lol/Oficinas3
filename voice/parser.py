@@ -84,6 +84,16 @@ ACTIONS = {
         "resign",
         "surrender",
     ),
+    "ORGANIZE_BOARD": (
+        "organize board",
+        "organize pieces",
+        "organize",
+        "reset board",
+        "reset pieces",
+        "arrange board",
+        "arrange pieces",
+        "setup board",
+    ),
 }
 
 MOVE_WORDS = {"move", "play"}

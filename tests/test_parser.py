@@ -75,6 +75,13 @@ ACTION_SUCCESS_CASES = [
     ("resign game", "RESIGN_GAME"),
     ("resign", "RESIGN_GAME"),
     ("surrender", "RESIGN_GAME"),
+    # ORGANIZE BOARD (EN)
+    ("organize board", "ORGANIZE_BOARD"),
+    ("organize pieces", "ORGANIZE_BOARD"),
+    ("reset board", "ORGANIZE_BOARD"),
+    ("reset pieces", "ORGANIZE_BOARD"),
+    ("arrange board", "ORGANIZE_BOARD"),
+    ("setup board", "ORGANIZE_BOARD"),
 ]
 
 

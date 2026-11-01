@@ -86,6 +86,47 @@ class StatusLeds:
             time.sleep(half)
         self.set(side, "off")
 
+    def celebrate(self, winner_side: str, loser_side: str, seconds: float = 5.0,
+                  hz: float = 3.0) -> None:
+        """
+        Comemora o fim da partida:
+        - Vencedor: pisca alternando varias cores (sem vermelho).
+        - Perdedor: pisca em vermelho.
+        Termina com ambos apagados.
+        """
+        celebration_colors = ["green", "blue", "cyan", "yellow", "magenta", "white"]
+        half = 0.5 / hz
+        end = time.monotonic() + seconds
+        idx = 0
+        on = True
+        while time.monotonic() < end:
+            if on:
+                win_color = celebration_colors[idx % len(celebration_colors)]
+                lose_color = "red"
+                idx += 1
+            else:
+                win_color = "off"
+                lose_color = "off"
+            self.set(winner_side, win_color)
+            self.set(loser_side, lose_color)
+            on = not on
+            time.sleep(half)
+        self.off()
+
+    def blink_both(self, color: str, seconds: float = 5.0, hz: float = 3.0) -> None:
+        """Pisca ambos os LEDs na mesma cor durante `seconds` e termina apagado (ex: empate/afogamento)."""
+        half = 0.5 / hz
+        end = time.monotonic() + seconds
+        on = True
+        sides = list(cfg.LED_PINS)
+        while time.monotonic() < end:
+            c = color if on else "off"
+            for s in sides:
+                self.set(s, c)
+            on = not on
+            time.sleep(half)
+        self.off()
+
     def _write(self, side: str, color: str) -> None:
         if self._state.get(side) == color:
             return
