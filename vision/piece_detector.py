@@ -39,6 +39,7 @@ import numpy as np
 
 from . import config as cfg
 from .piece_classifier import PieceClassifier
+from .segmentation import BoardSegmenter
 
 log = logging.getLogger(__name__)
 
@@ -118,15 +119,18 @@ class PieceDetector:
         occupied_variance_threshold: float = cfg.OCCUPIED_VARIANCE_THRESHOLD,
         brightness_threshold: int = cfg.PIECE_BRIGHTNESS_THRESHOLD,
         min_confidence: float = cfg.MIN_CONFIDENCE,
+        board_orientation: str = "normal",
     ) -> None:
-        self._ref = reference_image
         self._diff_thresh = occupied_diff_threshold
         self._var_thresh  = occupied_variance_threshold
         self._bright_thr  = brightness_threshold
         self._min_conf    = min_confidence
+        self._orientation = board_orientation
 
-        # Extract reference square ROIs once (avoid re-slicing on every call)
+        self._ref = None
         self._ref_squares: dict[str, np.ndarray] = {}
+        if reference_image is not None:
+            self.set_reference(reference_image, orientation=board_orientation)
 
         # Piece type classifier (template matching on pieces/*.png)
         self._classifier: PieceClassifier | None = None
@@ -138,11 +142,20 @@ class PieceDetector:
     # Public API
     # ------------------------------------------------------------------
 
-    def set_reference(self, reference_image: np.ndarray) -> None:
-        """Update the reference (empty board) image and clear the ROI cache."""
+    def set_reference(
+        self, reference_image: np.ndarray, orientation: str | None = None
+    ) -> None:
+        """Update the reference (empty board) image and pre-slice all 64 square ROIs."""
         self._ref = reference_image
-        self._ref_squares = {}
-        log.info("[Detector] Reference image updated.")
+        if orientation is not None:
+            self._orientation = orientation
+        try:
+            segmenter = BoardSegmenter(board_orientation=self._orientation)
+            self._ref_squares = segmenter.segment_board(reference_image)
+            log.info("[Detector] Reference image updated (%d squares).", len(self._ref_squares))
+        except Exception as e:
+            self._ref_squares = {}
+            log.warning("[Detector] Could not auto-segment reference image: %s", e)
 
     def analyze_square(
         self,
@@ -160,13 +173,16 @@ class PieceDetector:
         roi : np.ndarray
             Current BGR image crop of the square.
         ref_roi : np.ndarray | None
-            Reference (empty) crop of the same square.  If None and a
+            Reference (empty) crop of the same square. If None and a
             reference image is stored, uses it automatically.
 
         Returns
         -------
         SquareAnalysis
         """
+        if ref_roi is None and square in self._ref_squares:
+            ref_roi = self._ref_squares[square]
+
         # ── Occupancy detection ───────────────────────────────────────
         occupied, occ_confidence, mad, variance = self._detect_occupancy(
             roi, ref_roi
@@ -209,15 +225,16 @@ class PieceDetector:
         squares : dict[str, np.ndarray]
             From BoardSegmenter.segment_board().
         ref_squares : dict[str, np.ndarray] | None
-            Reference ROIs.  If None, extracted from self._ref automatically.
+            Reference ROIs. If None, extracted from self._ref automatically.
 
         Returns
         -------
         dict mapping square name to SquareAnalysis.
         """
         results: dict[str, SquareAnalysis] = {}
+        ref_map = ref_squares if ref_squares is not None else self._ref_squares
         for sq, roi in squares.items():
-            ref_roi = (ref_squares or {}).get(sq)
+            ref_roi = ref_map.get(sq)
             results[sq] = self.analyze_square(sq, roi, ref_roi=ref_roi)
         return results
 
@@ -279,7 +296,13 @@ class PieceDetector:
         if ref_roi is not None:
             ref_gray = cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
             diff = np.abs(gray - ref_gray)
-            mad = float(np.mean(diff)) / 255.0    # normalise to [0, 1]
+            h, w = diff.shape
+            my, mx = int(h * 0.15), int(w * 0.15)
+            center_diff = diff[my : h - my, mx : w - mx]
+
+            full_mad = float(np.mean(diff)) / 255.0
+            center_mad = float(np.mean(center_diff)) / 255.0
+            mad = max(full_mad, center_mad)
 
             occupied = mad >= self._diff_thresh
             # Confidence: how far above/below the threshold we are

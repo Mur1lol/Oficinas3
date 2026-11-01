@@ -545,8 +545,16 @@ class WebCalibratorApp:
 
         ref_path = Path(cfg.VISION_DIR) / "reference_empty.png"
         ref_img = cv2.imread(str(ref_path)) if ref_path.is_file() else None
+        if ref_img is None:
+            return {
+                "success": False,
+                "error": "Imagem de referência não encontrada! Clique primeiro em 'Gravar Tabuleiro Vazio' com o tabuleiro limpo.",
+            }
 
-        detector = PieceDetector(reference_image=ref_img)
+        detector = PieceDetector(
+            reference_image=ref_img,
+            board_orientation=cal.board_orientation,
+        )
         segmenter = BoardSegmenter(board_orientation=cal.board_orientation)
         squares = segmenter.segment_board(warped)
 
@@ -563,7 +571,7 @@ class WebCalibratorApp:
             "success": True,
             "occupied_squares": occupied,
             "confidence": round(avg_conf, 3),
-            "reference_used": ref_img is not None,
+            "reference_used": True,
         }
 
 
