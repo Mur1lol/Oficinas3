@@ -77,6 +77,8 @@ class SquareAnalysis:
     confidence: float
     mad:        float = 0.0
     variance:   float = 0.0
+    is_piece:   bool = False
+    is_hand:    bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +87,8 @@ class SquareAnalysis:
             "color":      self.color,
             "piece":      self.piece,
             "confidence": round(self.confidence, 4),
+            "is_piece":   self.is_piece,
+            "is_hand":    self.is_hand,
         }
 
 
@@ -157,6 +161,100 @@ class PieceDetector:
             self._ref_squares = {}
             log.warning("[Detector] Could not auto-segment reference image: %s", e)
 
+    def _verify_piece(
+        self,
+        roi: np.ndarray,
+        ref_roi: np.ndarray | None,
+        occupied_raw: bool,
+        mad: float,
+        variance: float,
+        color: Optional[str],
+        piece: Optional[str],
+    ) -> tuple[bool, bool, float, float]:
+        """
+        Verifica se o objeto no ROI e uma peca de xadrez fisica real ou uma mao/obstrucao/ruido.
+
+        Retorna:
+            (is_piece, is_hand, confidence, radial_edge)
+        """
+        if not occupied_raw:
+            return False, False, max(0.5, 1.0 - mad), 0.0
+
+        if not getattr(cfg, "PIECE_VERIFICATION_ENABLED", True):
+            return True, False, 0.85, 50.0
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+        gray = cv2.resize(gray, (80, 80))
+
+        # 1. Medicao de centro vs borda (para detectar se o objeto transborda a casa)
+        center_mad = 0.0
+        border_mad = 0.0
+        ratio = 1.0
+        if ref_roi is not None:
+            ref_gray = cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY) if ref_roi.ndim == 3 else ref_roi
+            ref_gray = cv2.resize(ref_gray, (80, 80))
+            diff = cv2.absdiff(gray, ref_gray)
+            Y, X = np.ogrid[:80, :80]
+            dist_c = np.sqrt((X - 40) ** 2 + (Y - 40) ** 2)
+            border_mask = np.ones((80, 80), dtype=bool)
+            border_mask[8:72, 8:72] = False
+            center_mad = float(np.mean(diff[dist_c <= 20])) / 255.0
+            border_mad = float(np.mean(diff[border_mask])) / 255.0
+            ratio = center_mad / max(0.001, border_mad)
+
+        # 2. Contraste do icone central vs anel do disco
+        h, w = gray.shape
+        Y, X = np.ogrid[:h, :w]
+        dist = np.sqrt((X - 40) ** 2 + (Y - 40) ** 2)
+        ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
+        split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
+        det_color = color if color in ("white", "black") else ("white" if ring_val < split_thresh else "black")
+
+        if det_color == "black":
+            norm = ring_val - gray.astype(np.float32)
+        else:
+            norm = gray.astype(np.float32) - ring_val
+        norm = np.maximum(0.0, norm) * (dist <= 12.0)
+        max_contrast = float(norm.max())
+        min_contrast = getattr(cfg, "PIECE_MIN_ICON_CONTRAST", 35.0)
+
+        # 3. Gradiente radial circular (disco da peca)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        gx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+        thetas = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+        cos_t = np.cos(thetas)
+        sin_t = np.sin(thetas)
+        best_radial_edge = 0.0
+        for r in range(13, 18):
+            xs = np.clip(np.round(40 + r * cos_t).astype(int), 0, 79)
+            ys = np.clip(np.round(40 + r * sin_t).astype(int), 0, 79)
+            g_rad = np.abs(gx[ys, xs] * cos_t + gy[ys, xs] * sin_t)
+            best_radial_edge = max(best_radial_edge, float(np.mean(g_rad)))
+
+        # ── Decisoes de classificacao da estrutura ──
+        # Regra A: Peca confirmada por template match e centralizada / bom contraste
+        if piece is not None and (best_radial_edge >= 35.0 or ratio >= 0.95 or max_contrast >= 60.0):
+            return True, False, 0.90, best_radial_edge
+
+        # Regra B: Formato de disco e contraste forte de icone confirmados
+        if max_contrast >= 60.0 and best_radial_edge >= 35.0 and (ref_roi is None or ratio >= 0.90):
+            return True, False, 0.75, best_radial_edge
+
+        # Regra C: Transbordo de bordas (mao/braco atravessando divisorias das casas)
+        if ref_roi is not None and border_mad >= 0.18 and ratio < 0.98 and best_radial_edge < 35.0:
+            return False, True, 0.90, best_radial_edge
+
+        # Regra D: Diferenca de brilho sem icone gravado (pele/madeira/sombra)
+        if max_contrast < min_contrast and mad >= 0.14:
+            return False, True, 0.85, best_radial_edge
+
+        # Regra E: Obstrucao generica sem evidencia de disco
+        if mad >= 0.14:
+            return False, True, 0.70, best_radial_edge
+
+        return False, False, 0.60, best_radial_edge
+
     def analyze_square(
         self,
         square: str,
@@ -164,43 +262,39 @@ class PieceDetector:
         ref_roi: np.ndarray | None = None,
     ) -> SquareAnalysis:
         """
-        Analyse a single square ROI.
-
-        Parameters
-        ----------
-        square : str
-            Square label, e.g. "A1".
-        roi : np.ndarray
-            Current BGR image crop of the square.
-        ref_roi : np.ndarray | None
-            Reference (empty) crop of the same square. If None and a
-            reference image is stored, uses it automatically.
-
-        Returns
-        -------
-        SquareAnalysis
+        Analyse a single square ROI with piece-vs-hand discrimination.
         """
         if ref_roi is None and square in self._ref_squares:
             ref_roi = self._ref_squares[square]
 
         # ── Occupancy detection ───────────────────────────────────────
-        occupied, occ_confidence, mad, variance = self._detect_occupancy(
+        occupied_raw, occ_confidence, mad, variance = self._detect_occupancy(
             roi, ref_roi
         )
 
         # ── Colour detection ──────────────────────────────────────────
         color: Optional[str] = None
         color_confidence = 1.0
-        if occupied:
+        if occupied_raw:
             color, color_confidence = self._detect_color(roi)
-
-        # ── Combined confidence ───────────────────────────────────────
-        confidence = occ_confidence * color_confidence if occupied else occ_confidence
 
         # ── Piece type (template matching) ────────────────────────────
         piece: Optional[str] = None
-        if occupied and self._classifier is not None:
-            piece, _ = self._classifier.classify(roi, color)
+        piece_confidence = 0.0
+        if occupied_raw and self._classifier is not None:
+            piece, piece_confidence = self._classifier.classify(roi, color)
+
+        # ── Piece structure verification (piece vs hand/obstruction) ──
+        is_piece, is_hand, verif_conf, _ = self._verify_piece(
+            roi, ref_roi, occupied_raw, mad, variance, color, piece
+        )
+
+        occupied = is_piece
+        if not is_piece:
+            color = None
+            piece = None
+
+        confidence = piece_confidence if (is_piece and piece is not None) else verif_conf
 
         return SquareAnalysis(
             square=square,
@@ -210,7 +304,27 @@ class PieceDetector:
             confidence=confidence,
             mad=mad,
             variance=variance,
+            is_piece=is_piece,
+            is_hand=is_hand,
         )
+
+    @staticmethod
+    def _get_neighbors(square: str) -> list[str]:
+        cols = "ABCDEFGH"
+        rows = "87654321"
+        if len(square) != 2 or square[0] not in cols or square[1] not in rows:
+            return []
+        c = cols.index(square[0])
+        r = rows.index(square[1])
+        nbrs = []
+        for dc in (-1, 0, 1):
+            for dr in (-1, 0, 1):
+                if dc == 0 and dr == 0:
+                    continue
+                nc, nr = c + dc, r + dr
+                if 0 <= nc < 8 and 0 <= nr < 8:
+                    nbrs.append(f"{cols[nc]}{rows[nr]}")
+        return nbrs
 
     def analyze_all(
         self,
@@ -218,24 +332,44 @@ class PieceDetector:
         ref_squares: dict[str, np.ndarray] | None = None,
     ) -> dict[str, SquareAnalysis]:
         """
-        Analyse all 64 board squares.
-
-        Parameters
-        ----------
-        squares : dict[str, np.ndarray]
-            From BoardSegmenter.segment_board().
-        ref_squares : dict[str, np.ndarray] | None
-            Reference ROIs. If None, extracted from self._ref automatically.
-
-        Returns
-        -------
-        dict mapping square name to SquareAnalysis.
+        Analyse all 64 board squares with multi-square obstruction clustering.
         """
         results: dict[str, SquareAnalysis] = {}
         ref_map = ref_squares if ref_squares is not None else self._ref_squares
         for sq, roi in squares.items():
             ref_roi = ref_map.get(sq)
             results[sq] = self.analyze_square(sq, roi, ref_roi=ref_roi)
+
+        # ── Pass 2: Connected component cluster check (obstruction filtering) ──
+        initial_hands = {sq for sq, a in results.items() if a.is_hand}
+        if len(initial_hands) >= 2:
+            for sq, a in results.items():
+                if a.is_piece:
+                    nbrs = self._get_neighbors(sq)
+                    adj_hands = [n for n in nbrs if n in initial_hands]
+                    if len(adj_hands) >= 2:
+                        ref_roi = ref_map.get(sq)
+                        if ref_roi is not None:
+                            roi = squares[sq]
+                            diff = cv2.absdiff(
+                                cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY),
+                                cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY),
+                            )
+                            border_mask = np.ones((80, 80), dtype=bool)
+                            border_mask[8:72, 8:72] = False
+                            Y, X = np.ogrid[:80, :80]
+                            dist_c = np.sqrt((X - 40) ** 2 + (Y - 40) ** 2)
+                            c_mad = float(np.mean(diff[dist_c <= 20]))
+                            b_mad = float(np.mean(diff[border_mask]))
+                            sq_ratio = c_mad / max(0.001, b_mad)
+                            # Se estiver cercado por maos e nao tiver confianca alta nem for claramente centrado:
+                            if a.confidence < 0.60 or sq_ratio < 1.10:
+                                a.is_piece = False
+                                a.occupied = False
+                                a.is_hand = True
+                                a.color = None
+                                a.piece = None
+
         return results
 
     def analyze_cemetery_slot(
@@ -268,6 +402,8 @@ class PieceDetector:
             confidence=confidence,
             mad=mad,
             variance=variance,
+            is_piece=occupied,
+            is_hand=False,
         )
 
     # ------------------------------------------------------------------

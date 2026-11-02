@@ -82,12 +82,13 @@ def _extract_icon(
     mask = (dist <= radius_mask).astype(np.float32)
     norm = norm * mask
 
-    max_val = norm.max()
-    if max_val > 5.0:
-        norm = (norm / max_val * 255.0).astype(np.uint8)
-    else:
-        norm = norm.astype(np.uint8)
+    max_val = float(norm.max())
+    min_contrast = getattr(cfg, "PIECE_MIN_ICON_CONTRAST", 35.0)
+    if max_val < min_contrast:
+        # Contraste insuficiente: nao ha simbolo de peca gravado (pele, madeira ou sombra)
+        return np.zeros_like(gray), det_color
 
+    norm = (norm / max_val * 255.0).astype(np.uint8)
     return norm, det_color
 
 
@@ -223,6 +224,8 @@ class PieceClassifier:
         self, roi: np.ndarray, color: Optional[str]
     ) -> tuple[Optional[str], float]:
         icon, det_color = _extract_icon(roi, color=color)
+        if icon.max() == 0:
+            return None, 0.0
         # Janela de busca 32x32 ao redor do centro (40, 40) -> tolera +/- 5 px de desalinhamento
         search = icon[_SEARCH_BOX[0]:_SEARCH_BOX[1], _SEARCH_BOX[0]:_SEARCH_BOX[1]]
 

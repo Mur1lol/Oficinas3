@@ -40,10 +40,17 @@ PIECES_DIR: str = str(_pieces_candidate)
 PIECE_SAMPLES_DIR: str = str(VISION_DIR / "pieces" / "samples")
 
 # Correlacao minima (TM_CCOEFF_NORMED) com a melhor amostra para aceitar o tipo
-PIECE_SAMPLE_MIN_SCORE: float = 0.50
+PIECE_SAMPLE_MIN_SCORE: float = 0.68
 
 # Diferenca minima entre o melhor e o segundo melhor tipo
-PIECE_SAMPLE_MIN_MARGIN: float = 0.015
+PIECE_SAMPLE_MIN_MARGIN: float = 0.020
+
+# Contraste minimo do icone central vs anel do disco (0-255).
+# Em pecas reais o contraste e entre 70 e 180 (media 142). Se < 35, nao ha icone (pele/madeira/sombra).
+PIECE_MIN_ICON_CONTRAST: float = 35.0
+
+# Habilita verificacao de estrutura da peca (descarta maos, sombras e ruidos)
+PIECE_VERIFICATION_ENABLED: bool = True
 
 # Limiar de brilho medio do anel do disco (raio 12-16px) separando pecas brancas de pretas.
 # No conjunto fisico: pecas brancas (disco escuro) tem anel ~85; pretas (disco claro) ~138.

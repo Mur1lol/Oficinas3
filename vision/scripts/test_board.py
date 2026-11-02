@@ -76,22 +76,22 @@ def main() -> None:
     squares = segmenter.segment_board(warped)
     detector = PieceDetector(reference_image=ref_img)
 
-    results = {}
+    results = detector.analyze_all(squares)
     occupied_count = 0
     white_count = 0
     black_count = 0
+    hand_squares = []
 
-    for name, roi in squares.items():
-        analysis = detector.analyze_square(name, roi)
-        results[name] = analysis
-        if analysis.occupied:
+    for name, analysis in results.items():
+        if getattr(analysis, "is_hand", False):
+            hand_squares.append(name)
+        if analysis.occupied and getattr(analysis, "is_piece", True):
             occupied_count += 1
             if analysis.color == "white":
                 white_count += 1
             elif analysis.color == "black":
                 black_count += 1
 
-    # Renderiza Tabuleiro ASCII
     # Renderiza Tabuleiro ASCII
     cols = "ABCDEFGH"
     rows = "87654321"
@@ -107,7 +107,7 @@ def main() -> None:
         for c in cols:
             sq = f"{c}{r}"
             st = results.get(sq)
-            if not st or not st.occupied:
+            if not st or not st.occupied or not getattr(st, "is_piece", True):
                 char = "  "
             else:
                 col_c = (st.color or "?")[0].upper()
@@ -118,12 +118,16 @@ def main() -> None:
         print("   +----+----+----+----+----+----+----+----+")
     print("      A    B    C    D    E    F    G    H\n")
 
-    identified = sum(1 for st in results.values() if st.occupied and st.piece)
+    identified = sum(1 for st in results.values() if st.occupied and getattr(st, "is_piece", True) and st.piece)
     print(f"Total de peças detectadas: {occupied_count}")
     print(f"  - Peças Brancas (W): {white_count}")
     print(f"  - Peças Pretas  (B): {black_count}")
     print(f"  - Identificadas com tipo : {identified}/{occupied_count}")
     print(f"  - Casas Vazias     : {64 - occupied_count}\n")
+
+    if hand_squares:
+        print(f"⚠️  [AVISO] Mão ou obstrução detectada nas casas: {', '.join(sorted(hand_squares))}")
+        print("           Essas casas foram desconsideradas para evitar classificações falsas.\n")
 
 
 if __name__ == "__main__":

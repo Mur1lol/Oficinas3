@@ -431,7 +431,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           : "<strong style='color:#34d399;'>Nenhuma peça (tabuleiro vazio)</strong>";
         const hint = res.classifier === "samples" ? "amostras reais"
                    : res.classifier === "icons" ? "ícones genéricos (treine as peças para melhorar!)" : "desligado";
-        info.innerHTML = `<strong>Peças (${res.squares.length}):</strong> ${list}<br>
+        let handNotice = "";
+        if (res.hands && res.hands.length) {
+          handNotice = `<br><span style='color:#f87171;'>⚠️ <strong>Mão/Obstrução detectada</strong> nas casas: ${res.hands.join(", ")} (desconsideradas)</span>`;
+        }
+        info.innerHTML = `<strong>Peças (${res.squares.length}):</strong> ${list}${handNotice}<br>
           <strong>Classificador:</strong> ${hint} | <strong>Limiar:</strong> ${thresh.toFixed(2)} | <strong>Confiança:</strong> ${(res.confidence * 100).toFixed(1)}%`;
       }).catch(err => { info.innerHTML = "Erro de conexão: " + err; });
     }
@@ -635,11 +639,13 @@ class WebCalibratorApp:
         clf = detector._classifier
         mode = "off" if clf is None else ("samples" if clf.has_samples else "icons")
 
-        found, confidences = [], []
-        for name, roi in squares.items():
-            a = detector.analyze_square(name, roi)
+        analyses = detector.analyze_all(squares)
+        found, confidences, hands = [], [], []
+        for name, a in analyses.items():
             confidences.append(a.confidence)
-            if not a.occupied:
+            if getattr(a, "is_hand", False):
+                hands.append(name)
+            if not a.occupied or not getattr(a, "is_piece", True):
                 continue
             found.append({"square": name, "color": a.color, "piece": a.piece})
             x0, y0 = square_display_pos(name, orientation)
@@ -654,6 +660,7 @@ class WebCalibratorApp:
         return {
             "success": True,
             "squares": found,
+            "hands": hands,
             "confidence": round(float(np.mean(confidences)) if confidences else 1.0, 3),
             "classifier": mode,
             "annotated_image": base64.b64encode(buf).decode("utf-8") if ok else None,
