@@ -77,8 +77,6 @@ class SquareAnalysis:
     confidence: float
     mad:        float = 0.0
     variance:   float = 0.0
-    is_piece:   bool = False
-    is_hand:    bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -87,8 +85,6 @@ class SquareAnalysis:
             "color":      self.color,
             "piece":      self.piece,
             "confidence": round(self.confidence, 4),
-            "is_piece":   self.is_piece,
-            "is_hand":    self.is_hand,
         }
 
 
@@ -168,55 +164,52 @@ class PieceDetector:
         ref_roi: np.ndarray | None = None,
     ) -> SquareAnalysis:
         """
-        Analyse a single square ROI:
-        1. Checks raw occupancy (difference against reference empty board).
-        2. If occupied, detects color and runs piece classification.
-        3. Verifies if the object is an actual chess piece (has valid piece icon & confidence).
-           If not a piece (hand, arm, shadow, table disturbance), it is rejected as empty.
+        Analyse a single square ROI.
+
+        Parameters
+        ----------
+        square : str
+            Square label, e.g. "A1".
+        roi : np.ndarray
+            Current BGR image crop of the square.
+        ref_roi : np.ndarray | None
+            Reference (empty) crop of the same square. If None and a
+            reference image is stored, uses it automatically.
+
+        Returns
+        -------
+        SquareAnalysis
         """
         if ref_roi is None and square in self._ref_squares:
             ref_roi = self._ref_squares[square]
 
         # ── Occupancy detection ───────────────────────────────────────
-        occupied_raw, occ_confidence, mad, variance = self._detect_occupancy(
+        occupied, occ_confidence, mad, variance = self._detect_occupancy(
             roi, ref_roi
         )
 
-        if not occupied_raw:
-            return SquareAnalysis(
-                square=square,
-                occupied=False,
-                color=None,
-                piece=None,
-                confidence=occ_confidence,
-                mad=mad,
-                variance=variance,
-                is_piece=False,
-                is_hand=False,
-            )
-
         # ── Colour detection ──────────────────────────────────────────
-        color, color_confidence = self._detect_color(roi)
+        color: Optional[str] = None
+        color_confidence = 1.0
+        if occupied:
+            color, color_confidence = self._detect_color(roi)
 
-        # ── Piece type & verification (is it an actual piece?) ────────
+        # ── Combined confidence ───────────────────────────────────────
+        confidence = occ_confidence * color_confidence if occupied else occ_confidence
+
+        # ── Piece type (template matching) ────────────────────────────
         piece: Optional[str] = None
-        piece_confidence = 0.0
-        if self._classifier is not None:
-            piece, piece_confidence = self._classifier.classify(roi, color)
-
-        is_piece = (piece is not None)
-        confidence = piece_confidence if is_piece else (occ_confidence * color_confidence)
+        if occupied and self._classifier is not None:
+            piece, _ = self._classifier.classify(roi, color)
 
         return SquareAnalysis(
             square=square,
-            occupied=occupied_raw,
+            occupied=occupied,
             color=color,
             piece=piece,
             confidence=confidence,
             mad=mad,
             variance=variance,
-            is_piece=is_piece,
-            is_hand=False,
         )
 
     def analyze_all(
@@ -226,6 +219,17 @@ class PieceDetector:
     ) -> dict[str, SquareAnalysis]:
         """
         Analyse all 64 board squares.
+
+        Parameters
+        ----------
+        squares : dict[str, np.ndarray]
+            From BoardSegmenter.segment_board().
+        ref_squares : dict[str, np.ndarray] | None
+            Reference ROIs. If None, extracted from self._ref automatically.
+
+        Returns
+        -------
+        dict mapping square name to SquareAnalysis.
         """
         results: dict[str, SquareAnalysis] = {}
         ref_map = ref_squares if ref_squares is not None else self._ref_squares
@@ -264,8 +268,6 @@ class PieceDetector:
             confidence=confidence,
             mad=mad,
             variance=variance,
-            is_piece=occupied,
-            is_hand=False,
         )
 
     # ------------------------------------------------------------------
@@ -293,8 +295,6 @@ class PieceDetector:
 
         if ref_roi is not None:
             ref_gray = cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
-            if ref_gray.shape != gray.shape:
-                ref_gray = cv2.resize(ref_gray, (gray.shape[1], gray.shape[0]))
             diff = np.abs(gray - ref_gray)
             h, w = diff.shape
             my, mx = int(h * 0.15), int(w * 0.15)
@@ -329,30 +329,42 @@ class PieceDetector:
 
     def _detect_color(self, roi: np.ndarray) -> tuple[str, float]:
         """
-        Detecta a cor da peca ("white" ou "black").
-        As pecas brancas possuem verniz claro com tom frio/azulado (B - G >= 9.0).
-        As pecas pretas possuem corpo de madeira neutro/escuro (B - G <= 8.2).
-        Fallback para anel de brilho quando imagem em tons de cinza.
+        Returns (color, confidence) where color is "white" or "black".
+
+        Method
+        ------
+        For circular puck pieces:
+        Evaluates the puck body ring (radius 12 to 16 px) and center icon (radius <= 8 px).
+        In the physical set:
+        - White player: Dark body puck (mean ~85) with bright icon (contrast > 0).
+        - Black player: Light body puck (mean ~138) with dark icon (contrast < 0).
+        Threshold at PIECE_PUCK_SPLIT_THRESHOLD (112) cleanly separates white from
+        black pieces without being distorted by the underlying square color.
         """
-        from .piece_classifier import find_puck_center
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
-        gray = cv2.resize(gray, (80, 80))
-        cx, cy = find_puck_center(gray)
-
         if roi.ndim == 3:
-            h, w = roi.shape[:2]
-            scale_y, scale_x = h / 80.0, w / 80.0
-            rx, ry = int(cx * scale_x), int(cy * scale_y)
-            patch = roi[max(0, ry - 8): min(h, ry + 8), max(0, rx - 8): min(w, rx + 8)].astype(np.float32)
-            bg_diff = float(patch[:, :, 0].mean() - patch[:, :, 1].mean())
-            color = "white" if bg_diff >= 9.0 else "black"
-            conf = min(1.0, 0.70 + abs(bg_diff - 9.0) / 20.0)
-            return color, conf
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = roi
+        gray = cv2.resize(gray, (80, 80))
+        h, w = gray.shape
+        cx, cy = w // 2, h // 2
+        Y, X = np.ogrid[:h, :w]
+        dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
 
-        Y, X = np.ogrid[:80, :80]
-        dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
-        ring_val = float(gray[(dist >= 11) & (dist <= 15)].mean())
+        ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
+        icon_val = float(gray[dist <= 8].mean())
+        contrast = icon_val - ring_val
+
         split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
-        color = "white" if ring_val < split_thresh else "black"
-        conf = min(1.0, 0.6 + abs(split_thresh - ring_val) / 50.0)
-        return color, conf
+        if ring_val < split_thresh:
+            color = "white"
+            conf = min(1.0, 0.6 + abs(split_thresh - ring_val) / 50.0)
+            if contrast > 0:
+                conf = min(1.0, conf + 0.1)
+        else:
+            color = "black"
+            conf = min(1.0, 0.6 + abs(ring_val - split_thresh) / 50.0)
+            if contrast < 0:
+                conf = min(1.0, conf + 0.1)
+
+        return color, float(conf)

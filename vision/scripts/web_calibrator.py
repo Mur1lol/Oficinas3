@@ -431,11 +431,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           : "<strong style='color:#34d399;'>Nenhuma peça (tabuleiro vazio)</strong>";
         const hint = res.classifier === "samples" ? "amostras reais"
                    : res.classifier === "icons" ? "ícones genéricos (treine as peças para melhorar!)" : "desligado";
-        let handNotice = "";
-        if (res.hands && res.hands.length) {
-          handNotice = `<br><span style='color:#f87171;'>⚠️ <strong>Mão/Obstrução detectada</strong> nas casas: ${res.hands.join(", ")} (desconsideradas)</span>`;
-        }
-        info.innerHTML = `<strong>Peças (${res.squares.length}):</strong> ${list}${handNotice}<br>
+        info.innerHTML = `<strong>Peças (${res.squares.length}):</strong> ${list}<br>
           <strong>Classificador:</strong> ${hint} | <strong>Limiar:</strong> ${thresh.toFixed(2)} | <strong>Confiança:</strong> ${(res.confidence * 100).toFixed(1)}%`;
       }).catch(err => { info.innerHTML = "Erro de conexão: " + err; });
     }
@@ -639,9 +635,9 @@ class WebCalibratorApp:
         clf = detector._classifier
         mode = "off" if clf is None else ("samples" if clf.has_samples else "icons")
 
-        analyses = detector.analyze_all(squares)
         found, confidences = [], []
-        for name, a in analyses.items():
+        for name, roi in squares.items():
+            a = detector.analyze_square(name, roi)
             confidences.append(a.confidence)
             if not a.occupied:
                 continue
@@ -658,7 +654,6 @@ class WebCalibratorApp:
         return {
             "success": True,
             "squares": found,
-            "hands": [],
             "confidence": round(float(np.mean(confidences)) if confidences else 1.0, 3),
             "classifier": mode,
             "annotated_image": base64.b64encode(buf).decode("utf-8") if ok else None,

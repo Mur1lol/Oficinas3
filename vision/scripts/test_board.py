@@ -76,19 +76,22 @@ def main() -> None:
     squares = segmenter.segment_board(warped)
     detector = PieceDetector(reference_image=ref_img)
 
-    results = detector.analyze_all(squares)
+    results = {}
     occupied_count = 0
     white_count = 0
     black_count = 0
 
-    for name, analysis in results.items():
-        if analysis.occupied and getattr(analysis, "is_piece", True):
+    for name, roi in squares.items():
+        analysis = detector.analyze_square(name, roi)
+        results[name] = analysis
+        if analysis.occupied:
             occupied_count += 1
             if analysis.color == "white":
                 white_count += 1
             elif analysis.color == "black":
                 black_count += 1
 
+    # Renderiza Tabuleiro ASCII
     # Renderiza Tabuleiro ASCII
     cols = "ABCDEFGH"
     rows = "87654321"
@@ -104,7 +107,7 @@ def main() -> None:
         for c in cols:
             sq = f"{c}{r}"
             st = results.get(sq)
-            if not st or not st.occupied or not getattr(st, "is_piece", True):
+            if not st or not st.occupied:
                 char = "  "
             else:
                 col_c = (st.color or "?")[0].upper()
@@ -115,7 +118,7 @@ def main() -> None:
         print("   +----+----+----+----+----+----+----+----+")
     print("      A    B    C    D    E    F    G    H\n")
 
-    identified = sum(1 for st in results.values() if st.occupied and getattr(st, "is_piece", True) and st.piece)
+    identified = sum(1 for st in results.values() if st.occupied and st.piece)
     print(f"Total de peças detectadas: {occupied_count}")
     print(f"  - Peças Brancas (W): {white_count}")
     print(f"  - Peças Pretas  (B): {black_count}")
