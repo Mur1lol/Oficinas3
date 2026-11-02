@@ -43,10 +43,7 @@ PIECE_SAMPLES_DIR: str = str(VISION_DIR / "pieces" / "samples")
 PIECE_SAMPLE_MIN_SCORE: float = 0.50
 
 # Diferenca minima entre o melhor e o segundo melhor tipo
-PIECE_SAMPLE_MIN_MARGIN: float = 0.015
-
-# Confianca minima calculada para aceitar a classificacao de tipo
-PIECE_SAMPLE_MIN_CONFIDENCE: float = 0.65
+PIECE_SAMPLE_MIN_MARGIN: float = 0.010
 
 # Contraste minimo do icone central vs anel do disco (0-255).
 # Em pecas reais o contraste e entre 70 e 180 (media 142). Se < 25, nao ha icone (pele plana/madeira).

@@ -254,9 +254,14 @@ class PieceClassifier:
         # Janela de busca 32x32 ao redor do centro (40, 40) -> tolera +/- 5 px de desalinhamento
         search = icon[_SEARCH_BOX[0]:_SEARCH_BOX[1], _SEARCH_BOX[0]:_SEARCH_BOX[1]]
 
+        color_samples = (
+            self._samples.get(color, {})
+            if (color in self._samples and any(self._samples[color].values()))
+            else self._pooled_samples
+        )
         scores: dict[str, float] = {}
         for ptype in _PIECE_TYPES:
-            tpls = self._pooled_samples.get(ptype)
+            tpls = color_samples.get(ptype) or self._pooled_samples.get(ptype)
             if not tpls:
                 continue
             best = max(float(cv2.matchTemplate(search, t, cv2.TM_CCOEFF_NORMED).max()) for t in tpls)
@@ -270,8 +275,7 @@ class PieceClassifier:
         second = ranked[1][1] if len(ranked) > 1 else 0.0
         margin = best - second
         confidence = float(np.clip(0.6 * best + 2.0 * margin, 0.0, 1.0))
-        min_conf = getattr(cfg, "PIECE_SAMPLE_MIN_CONFIDENCE", 0.65)
-        if best < cfg.PIECE_SAMPLE_MIN_SCORE or margin < cfg.PIECE_SAMPLE_MIN_MARGIN or confidence < min_conf:
+        if best < cfg.PIECE_SAMPLE_MIN_SCORE or margin < cfg.PIECE_SAMPLE_MIN_MARGIN:
             return None, confidence
         return best_type, confidence
 

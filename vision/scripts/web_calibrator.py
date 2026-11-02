@@ -643,7 +643,7 @@ class WebCalibratorApp:
         found, confidences = [], []
         for name, a in analyses.items():
             confidences.append(a.confidence)
-            if not a.occupied or not getattr(a, "is_piece", True):
+            if not a.occupied:
                 continue
             found.append({"square": name, "color": a.color, "piece": a.piece})
             x0, y0 = square_display_pos(name, orientation)

@@ -204,23 +204,13 @@ class PieceDetector:
         if self._classifier is not None:
             piece, piece_confidence = self._classifier.classify(roi, color)
 
-        # Estratégia: o item só é aceito se for confirmado como uma peça real.
-        # Qualquer outro objeto (mão, braço, sombra, ruído) não gera tipo válido e é descartado.
         is_piece = (piece is not None)
-
-        if getattr(cfg, "PIECE_TYPE_ENABLED", True) and self._classifier is not None:
-            occupied = is_piece
-            final_color = color if is_piece else None
-            confidence = piece_confidence if is_piece else 0.5
-        else:
-            occupied = occupied_raw
-            final_color = color
-            confidence = occ_confidence * color_confidence
+        confidence = piece_confidence if is_piece else (occ_confidence * color_confidence)
 
         return SquareAnalysis(
             square=square,
-            occupied=occupied,
-            color=final_color,
+            occupied=occupied_raw,
+            color=color,
             piece=piece,
             confidence=confidence,
             mad=mad,
