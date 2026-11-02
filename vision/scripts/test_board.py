@@ -80,11 +80,8 @@ def main() -> None:
     occupied_count = 0
     white_count = 0
     black_count = 0
-    hand_squares = []
 
     for name, analysis in results.items():
-        if getattr(analysis, "is_hand", False):
-            hand_squares.append(name)
         if analysis.occupied and getattr(analysis, "is_piece", True):
             occupied_count += 1
             if analysis.color == "white":
@@ -124,10 +121,6 @@ def main() -> None:
     print(f"  - Peças Pretas  (B): {black_count}")
     print(f"  - Identificadas com tipo : {identified}/{occupied_count}")
     print(f"  - Casas Vazias     : {64 - occupied_count}\n")
-
-    if hand_squares:
-        print(f"⚠️  [AVISO] Mão ou obstrução detectada nas casas: {', '.join(sorted(hand_squares))}")
-        print("           Essas casas foram desconsideradas para evitar classificações falsas.\n")
 
 
 if __name__ == "__main__":
