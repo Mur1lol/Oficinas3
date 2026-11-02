@@ -645,6 +645,12 @@ class WebCalibratorApp:
             confidences.append(a.confidence)
             if getattr(a, "is_hand", False):
                 hands.append(name)
+                x0, y0 = square_display_pos(name, orientation)
+                cv2.rectangle(annotated, (x0 + 3, y0 + 3), (x0 + SQ - 3, y0 + SQ - 3), (0, 140, 255), 2)
+                cv2.rectangle(annotated, (x0 + 4, y0 + 4), (x0 + 44, y0 + 24), (0, 0, 0), -1)
+                cv2.putText(annotated, "MAO", (x0 + 6, y0 + 19),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 140, 255), 1)
+                continue
             if not a.occupied or not getattr(a, "is_piece", True):
                 continue
             found.append({"square": name, "color": a.color, "piece": a.piece})

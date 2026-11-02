@@ -170,90 +170,43 @@ class PieceDetector:
         variance: float,
         color: Optional[str],
         piece: Optional[str],
-    ) -> tuple[bool, bool, float, float]:
+    ) -> tuple[bool, bool, float]:
         """
-        Verifica se o objeto no ROI e uma peca de xadrez fisica real ou uma mao/obstrucao/ruido.
+        Verifica se uma casa ocupada e uma peca de xadrez real ou uma mao/obstrucao.
 
         Retorna:
-            (is_piece, is_hand, confidence, radial_edge)
+            (is_piece, is_hand, confidence)
         """
         if not occupied_raw:
-            return False, False, max(0.5, 1.0 - mad), 0.0
+            return False, False, max(0.5, 1.0 - mad)
 
         if not getattr(cfg, "PIECE_VERIFICATION_ENABLED", True):
-            return True, False, 0.85, 50.0
+            return True, False, 0.85
 
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
-        gray = cv2.resize(gray, (80, 80))
+        # Se a peca foi reconhecida pelo classificador, e uma peca legitima
+        if piece is not None:
+            return True, False, 0.90
 
-        # 1. Medicao de centro vs borda (para detectar se o objeto transborda a casa)
-        center_mad = 0.0
-        border_mad = 0.0
-        ratio = 1.0
+        # Verificacao de mao/obstrucao para casas sem tipo identificado:
         if ref_roi is not None:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+            gray = cv2.resize(gray, (80, 80))
             ref_gray = cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY) if ref_roi.ndim == 3 else ref_roi
             ref_gray = cv2.resize(ref_gray, (80, 80))
             diff = cv2.absdiff(gray, ref_gray)
-            Y, X = np.ogrid[:80, :80]
-            dist_c = np.sqrt((X - 40) ** 2 + (Y - 40) ** 2)
+
             border_mask = np.ones((80, 80), dtype=bool)
-            border_mask[8:72, 8:72] = False
-            center_mad = float(np.mean(diff[dist_c <= 20])) / 255.0
-            border_mad = float(np.mean(diff[border_mask])) / 255.0
-            ratio = center_mad / max(0.001, border_mad)
+            border_mask[12:68, 12:68] = False
+            b_mad = float(np.mean(diff[border_mask])) / 255.0
+            c_mad = float(np.mean(diff[18:62, 18:62])) / 255.0
+            ratio = c_mad / max(0.001, b_mad)
 
-        # 2. Contraste do icone central vs anel do disco
-        h, w = gray.shape
-        Y, X = np.ogrid[:h, :w]
-        dist = np.sqrt((X - 40) ** 2 + (Y - 40) ** 2)
-        ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
-        split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
-        det_color = color if color in ("white", "black") else ("white" if ring_val < split_thresh else "black")
+            # Mao/braco cruzando a divisoria da casa: alto transbordo na borda
+            if b_mad >= 0.18 and ratio < 1.05:
+                return False, True, 0.85
 
-        if det_color == "black":
-            norm = ring_val - gray.astype(np.float32)
-        else:
-            norm = gray.astype(np.float32) - ring_val
-        norm = np.maximum(0.0, norm) * (dist <= 12.0)
-        max_contrast = float(norm.max())
-        min_contrast = getattr(cfg, "PIECE_MIN_ICON_CONTRAST", 35.0)
-
-        # 3. Gradiente radial circular (disco da peca)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        gx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
-        gy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
-        thetas = np.linspace(0, 2 * np.pi, 24, endpoint=False)
-        cos_t = np.cos(thetas)
-        sin_t = np.sin(thetas)
-        best_radial_edge = 0.0
-        for r in range(13, 18):
-            xs = np.clip(np.round(40 + r * cos_t).astype(int), 0, 79)
-            ys = np.clip(np.round(40 + r * sin_t).astype(int), 0, 79)
-            g_rad = np.abs(gx[ys, xs] * cos_t + gy[ys, xs] * sin_t)
-            best_radial_edge = max(best_radial_edge, float(np.mean(g_rad)))
-
-        # ── Decisoes de classificacao da estrutura ──
-        # Regra A: Peca confirmada por template match e centralizada / bom contraste
-        if piece is not None and (best_radial_edge >= 35.0 or ratio >= 0.95 or max_contrast >= 60.0):
-            return True, False, 0.90, best_radial_edge
-
-        # Regra B: Formato de disco e contraste forte de icone confirmados
-        if max_contrast >= 60.0 and best_radial_edge >= 35.0 and (ref_roi is None or ratio >= 0.90):
-            return True, False, 0.75, best_radial_edge
-
-        # Regra C: Transbordo de bordas (mao/braco atravessando divisorias das casas)
-        if ref_roi is not None and border_mad >= 0.18 and ratio < 0.98 and best_radial_edge < 35.0:
-            return False, True, 0.90, best_radial_edge
-
-        # Regra D: Diferenca de brilho sem icone gravado (pele/madeira/sombra)
-        if max_contrast < min_contrast and mad >= 0.14:
-            return False, True, 0.85, best_radial_edge
-
-        # Regra E: Obstrucao generica sem evidencia de disco
-        if mad >= 0.14:
-            return False, True, 0.70, best_radial_edge
-
-        return False, False, 0.60, best_radial_edge
+        # Caso contrario, o limiar de MAD do slider confirma a presenca da peca!
+        return True, False, 0.80
 
     def analyze_square(
         self,
@@ -267,7 +220,7 @@ class PieceDetector:
         if ref_roi is None and square in self._ref_squares:
             ref_roi = self._ref_squares[square]
 
-        # ── Occupancy detection ───────────────────────────────────────
+        # ── Occupancy detection (respeita o limiar de sensibilidade do slider) ──
         occupied_raw, occ_confidence, mad, variance = self._detect_occupancy(
             roi, ref_roi
         )
@@ -285,16 +238,17 @@ class PieceDetector:
             piece, piece_confidence = self._classifier.classify(roi, color)
 
         # ── Piece structure verification (piece vs hand/obstruction) ──
-        is_piece, is_hand, verif_conf, _ = self._verify_piece(
+        is_piece, is_hand, verif_conf = self._verify_piece(
             roi, ref_roi, occupied_raw, mad, variance, color, piece
         )
 
-        occupied = is_piece
-        if not is_piece:
+        # Ocupacao e controlada pelo limiar do slider, exceto se confirmada como mao
+        occupied = occupied_raw and not is_hand
+        if is_hand:
             color = None
             piece = None
 
-        confidence = piece_confidence if (is_piece and piece is not None) else verif_conf
+        confidence = piece_confidence if (occupied and piece is not None) else verif_conf
 
         return SquareAnalysis(
             square=square,
@@ -343,32 +297,40 @@ class PieceDetector:
         # ── Pass 2: Connected component cluster check (obstruction filtering) ──
         initial_hands = {sq for sq, a in results.items() if a.is_hand}
         if len(initial_hands) >= 2:
-            for sq, a in results.items():
-                if a.is_piece:
-                    nbrs = self._get_neighbors(sq)
-                    adj_hands = [n for n in nbrs if n in initial_hands]
-                    if len(adj_hands) >= 2:
-                        ref_roi = ref_map.get(sq)
-                        if ref_roi is not None:
-                            roi = squares[sq]
-                            diff = cv2.absdiff(
-                                cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY),
-                                cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY),
-                            )
-                            border_mask = np.ones((80, 80), dtype=bool)
-                            border_mask[8:72, 8:72] = False
-                            Y, X = np.ogrid[:80, :80]
-                            dist_c = np.sqrt((X - 40) ** 2 + (Y - 40) ** 2)
-                            c_mad = float(np.mean(diff[dist_c <= 20]))
-                            b_mad = float(np.mean(diff[border_mask]))
-                            sq_ratio = c_mad / max(0.001, b_mad)
-                            # Se estiver cercado por maos e nao tiver confianca alta nem for claramente centrado:
-                            if a.confidence < 0.60 or sq_ratio < 1.10:
-                                a.is_piece = False
-                                a.occupied = False
-                                a.is_hand = True
-                                a.color = None
-                                a.piece = None
+            for _ in range(2):
+                hand_set = {sq for sq, a in results.items() if a.is_hand}
+                for sq, a in results.items():
+                    if a.occupied and not a.is_hand and a.piece is None:
+                        nbrs = self._get_neighbors(sq)
+                        adj_hands = [n for n in nbrs if n in hand_set]
+                        if len(adj_hands) >= 1:
+                            ref_roi = ref_map.get(sq)
+                            if ref_roi is not None:
+                                roi = squares[sq]
+                                r_roi = ref_roi
+                                if roi.shape[:2] != (80, 80):
+                                    roi = cv2.resize(roi, (80, 80))
+                                if r_roi.shape[:2] != (80, 80):
+                                    r_roi = cv2.resize(r_roi, (80, 80))
+                                diff = cv2.absdiff(
+                                    cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi,
+                                    cv2.cvtColor(r_roi, cv2.COLOR_BGR2GRAY) if r_roi.ndim == 3 else r_roi,
+                                )
+                                border_mask = np.ones((80, 80), dtype=bool)
+                                border_mask[12:68, 12:68] = False
+                                b_mad = float(np.mean(diff[border_mask])) / 255.0
+                                if b_mad >= 0.15 or a.mad >= 0.20:
+                                    a.is_piece = False
+                                    a.occupied = False
+                                    a.is_hand = True
+                                    a.color = None
+                                    a.piece = None
+        else:
+            # Isolated single square is never a human hand/arm: clear it
+            for sq in list(initial_hands):
+                results[sq].is_hand = False
+                results[sq].occupied = results[sq].mad >= self._diff_thresh
+                results[sq].is_piece = results[sq].occupied
 
         return results
 
@@ -431,6 +393,8 @@ class PieceDetector:
 
         if ref_roi is not None:
             ref_gray = cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            if ref_gray.shape != gray.shape:
+                ref_gray = cv2.resize(ref_gray, (gray.shape[1], gray.shape[0]))
             diff = np.abs(gray - ref_gray)
             h, w = diff.shape
             my, mx = int(h * 0.15), int(w * 0.15)
@@ -465,42 +429,30 @@ class PieceDetector:
 
     def _detect_color(self, roi: np.ndarray) -> tuple[str, float]:
         """
-        Returns (color, confidence) where color is "white" or "black".
-
-        Method
-        ------
-        For circular puck pieces:
-        Evaluates the puck body ring (radius 12 to 16 px) and center icon (radius <= 8 px).
-        In the physical set:
-        - White player: Dark body puck (mean ~85) with bright icon (contrast > 0).
-        - Black player: Light body puck (mean ~138) with dark icon (contrast < 0).
-        Threshold at PIECE_PUCK_SPLIT_THRESHOLD (112) cleanly separates white from
-        black pieces without being distorted by the underlying square color.
+        Detecta a cor da peca ("white" ou "black").
+        As pecas brancas possuem verniz claro com tom frio/azulado (B - G >= 9.0).
+        As pecas pretas possuem corpo de madeira neutro/escuro (B - G <= 8.2).
+        Fallback para anel de brilho quando imagem em tons de cinza.
         """
-        if roi.ndim == 3:
-            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = roi
+        from .piece_classifier import find_puck_center
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
         gray = cv2.resize(gray, (80, 80))
-        h, w = gray.shape
-        cx, cy = w // 2, h // 2
-        Y, X = np.ogrid[:h, :w]
-        dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
+        cx, cy = find_puck_center(gray)
 
-        ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
-        icon_val = float(gray[dist <= 8].mean())
-        contrast = icon_val - ring_val
+        if roi.ndim == 3:
+            h, w = roi.shape[:2]
+            scale_y, scale_x = h / 80.0, w / 80.0
+            rx, ry = int(cx * scale_x), int(cy * scale_y)
+            patch = roi[max(0, ry - 8): min(h, ry + 8), max(0, rx - 8): min(w, rx + 8)].astype(np.float32)
+            bg_diff = float(patch[:, :, 0].mean() - patch[:, :, 1].mean())
+            color = "white" if bg_diff >= 9.0 else "black"
+            conf = min(1.0, 0.70 + abs(bg_diff - 9.0) / 20.0)
+            return color, conf
 
+        Y, X = np.ogrid[:80, :80]
+        dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
+        ring_val = float(gray[(dist >= 11) & (dist <= 15)].mean())
         split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
-        if ring_val < split_thresh:
-            color = "white"
-            conf = min(1.0, 0.6 + abs(split_thresh - ring_val) / 50.0)
-            if contrast > 0:
-                conf = min(1.0, conf + 0.1)
-        else:
-            color = "black"
-            conf = min(1.0, 0.6 + abs(ring_val - split_thresh) / 50.0)
-            if contrast < 0:
-                conf = min(1.0, conf + 0.1)
-
-        return color, float(conf)
+        color = "white" if ring_val < split_thresh else "black"
+        conf = min(1.0, 0.6 + abs(split_thresh - ring_val) / 50.0)
+        return color, conf

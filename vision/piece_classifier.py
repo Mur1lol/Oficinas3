@@ -35,8 +35,8 @@ _TEMPLATE_SIZE = 64  # px, reference icon resized to this before scaling
 # Amostras reais: normalizacao 80x80; busca 32x32 ao redor do centro (40, 40)
 # com molde central de 22x22 -> tolera +/- 5 px de deslocamento da peca.
 _SAMPLE_NORM = 80
-_SEARCH_BOX = (24, 56)  # 32x32 search window
-_TPL_BOX = (29, 51)     # 22x22 template window
+_SEARCH_BOX = (22, 58)  # 36x36 search window
+_TPL_BOX = (28, 52)     # 24x24 template window
 
 
 def _prep_square(img: np.ndarray) -> np.ndarray:
@@ -47,16 +47,35 @@ def _prep_square(img: np.ndarray) -> np.ndarray:
     return cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(img)
 
 
+def find_puck_center(gray: np.ndarray) -> tuple[int, int]:
+    """Localiza o centro do disco da peca tolerando inclinacao e perspectiva de camera."""
+    sub = gray[18:62, 22:58]
+    blurred = cv2.GaussianBlur(sub, (3, 3), 0)
+    gx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.sqrt(gx**2 + gy**2)
+    thresh = np.percentile(mag, 80)
+    ys, xs = np.where(mag >= thresh)
+    if len(xs) > 10:
+        cx = int(np.mean(xs) + 22)
+        cy = int(np.mean(ys) + 18)
+    else:
+        cx, cy = 40, 40
+    cx = max(30, min(50, cx))
+    cy = max(26, min(54, cy))
+    return cx, cy
+
+
 def _extract_icon(
-    img: np.ndarray, color: Optional[str] = None, radius_mask: float = 12.0
+    img: np.ndarray, color: Optional[str] = None, radius_mask: float = 14.0
 ) -> tuple[np.ndarray, str]:
     """
     Normaliza a imagem da casa recortada (80x80) para isolar o icone gravado no disco:
-    1. Mede o anel do corpo do disco (raio 12-16px).
-    2. Determina a polaridade (branca tem disco escuro com icone claro; preta tem
-       disco claro com icone escuro).
-    3. Inverte e subtrai o corpo para que o icone fique sempre brilhante sobre fundo preto.
-    4. Aplica mascara circular (raio 12px) que corta fora a borda do disco e a madeira da casa.
+    1. Localiza o centro real do disco (cx, cy) para compensar perspectiva.
+    2. Mede o anel do corpo do disco ao redor de (cx, cy).
+    3. Subtrai o corpo para que o icone fique sempre brilhante sobre fundo preto.
+    4. Translada o icone para que (cx, cy) fique exatamente em (40, 40).
+    5. Aplica mascara circular (raio 14px) centrada em (40, 40).
     """
     if img.ndim == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -64,12 +83,13 @@ def _extract_icon(
         gray = img
     gray = cv2.resize(gray, (_SAMPLE_NORM, _SAMPLE_NORM), interpolation=cv2.INTER_AREA)
 
+    cx, cy = find_puck_center(gray)
+
     h, w = gray.shape
-    cx, cy = w // 2, h // 2
     Y, X = np.ogrid[:h, :w]
     dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
 
-    ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
+    ring_val = float(gray[(dist >= 11) & (dist <= 15)].mean())
     split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
     det_color = color if color in ("white", "black") else ("white" if ring_val < split_thresh else "black")
 
@@ -79,17 +99,22 @@ def _extract_icon(
         norm = gray.astype(np.float32) - ring_val
     norm = np.maximum(0.0, norm)
 
-    mask = (dist <= radius_mask).astype(np.float32)
-    norm = norm * mask
+    # Centraliza o icone em (40, 40)
+    dx = 40 - cx
+    dy = 40 - cy
+    M = np.float32([[1, 0, dx], [0, 1, dy]])
+    shifted = cv2.warpAffine(norm, M, (_SAMPLE_NORM, _SAMPLE_NORM), borderValue=0)
 
-    max_val = float(norm.max())
-    min_contrast = getattr(cfg, "PIECE_MIN_ICON_CONTRAST", 35.0)
+    dist_c = np.sqrt((X - 40) ** 2 + (Y - 40) ** 2)
+    masked = shifted * (dist_c <= radius_mask)
+
+    max_val = float(masked.max())
+    min_contrast = getattr(cfg, "PIECE_MIN_ICON_CONTRAST", 15.0)
     if max_val < min_contrast:
-        # Contraste insuficiente: nao ha simbolo de peca gravado (pele, madeira ou sombra)
         return np.zeros_like(gray), det_color
 
-    norm = (norm / max_val * 255.0).astype(np.uint8)
-    return norm, det_color
+    norm_img = (masked / max_val * 255.0).astype(np.uint8)
+    return norm_img, det_color
 
 
 def _edge_map(gray: np.ndarray) -> np.ndarray:
@@ -245,7 +270,8 @@ class PieceClassifier:
         second = ranked[1][1] if len(ranked) > 1 else 0.0
         margin = best - second
         confidence = float(np.clip(0.6 * best + 2.0 * margin, 0.0, 1.0))
-        if best < cfg.PIECE_SAMPLE_MIN_SCORE or margin < cfg.PIECE_SAMPLE_MIN_MARGIN:
+        min_conf = getattr(cfg, "PIECE_SAMPLE_MIN_CONFIDENCE", 0.65)
+        if best < cfg.PIECE_SAMPLE_MIN_SCORE or margin < cfg.PIECE_SAMPLE_MIN_MARGIN or confidence < min_conf:
             return None, confidence
         return best_type, confidence
 

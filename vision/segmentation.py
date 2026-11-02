@@ -75,7 +75,12 @@ class BoardSegmenter:
         -------
         dict mapping square name (e.g. "A1") to its ROI (np.ndarray BGR).
         """
-        board = corrected[:, CEM_W: CEM_W + BOARD_SZ]
+        if corrected.shape[1] >= CEM_W + BOARD_SZ:
+            board = corrected[:, CEM_W: CEM_W + BOARD_SZ]
+        elif corrected.shape[1] == BOARD_SZ and corrected.shape[0] == BOARD_SZ:
+            board = corrected
+        else:
+            board = cv2.resize(corrected, (BOARD_SZ, BOARD_SZ))
 
         if self._orientation == "flipped":
             board = cv2.rotate(board, cv2.ROTATE_180)
