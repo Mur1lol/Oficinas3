@@ -47,9 +47,10 @@ class VoiceResult:
 
 
 class VoiceCommandPipeline:
-    def __init__(self, settings: Settings, *, recognizer=None, wake=None, on_state=None):
+    def __init__(self, settings: Settings, *, recognizer=None, wake=None, on_state=None, command_filter=None):
         self.settings = settings
         self.on_state = on_state
+        self.command_filter = command_filter
         self.state = PipelineState.IDLE
         if recognizer is None:
             from .stt_engine import VoskSTTEngine
@@ -78,6 +79,15 @@ class VoiceCommandPipeline:
             self._set_state(PipelineState.ERROR)
             raise
 
+    def listen_yes_no(self, stream=None) -> bool | None:
+        """Escuta diretamente uma resposta YES/NO (sem exigir a wake word MAGNUS)."""
+        if stream is None:
+            with AudioStream(self.settings) as opened:
+                return self.listen_yes_no(opened)
+        stream.discard_pending()
+        answer = self.recognizer.listen(stream, "confirmation", self.settings.confirmation_timeout)
+        return parse_confirmation(answer, self.settings.language)
+
     def _cycle(self, stream):
         stream.discard_pending()
         self._set_state(PipelineState.WAKE_WORD_LISTEN)
@@ -97,7 +107,11 @@ class VoiceCommandPipeline:
         if not checked["valid"]:
             return self._failure(command, checked["reason"], wake_detected=True)
 
-        # Comandos imediatos (ex: START NEW GAME, PVP/PVE, LEVEL, WHITE/BLACK, VALIDATE)
+        # Bloqueio de comandos por estado (impede usar comandos fora do momento permitido)
+        if self.command_filter is not None and not self.command_filter(command):
+            return self._failure(command, "Command not allowed in current state", wake_detected=True)
+
+        # Comandos imediatos (ex: START NEW GAME, OPTION 1/2, LEVEL, WHITE/BLACK, VALIDATE)
         # nao precisam de confirmacao YES/NO. Caso mude de ideia, comente o bloco abaixo:
         if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
             isinstance(command, LevelCommand) and IMMEDIATE_LEVEL

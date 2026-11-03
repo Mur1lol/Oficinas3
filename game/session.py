@@ -171,6 +171,18 @@ class VoiceChessGame:
     # Callbacks do listener
     # ------------------------------------------------------------------
 
+    def _set_allowed_commands(self, predicate) -> None:
+        """Define quais comandos de voz sao permitidos no estado atual."""
+        self._allowed_predicate = predicate
+        if hasattr(self.listener, "set_command_filter"):
+            self.listener.set_command_filter(predicate)
+
+    def _is_command_allowed(self, cmd) -> bool:
+        pred = getattr(self, "_allowed_predicate", None)
+        if pred is None:
+            return True
+        return bool(pred(cmd))
+
     def _on_listening(self, active: bool, context: str = "") -> None:
         led_side = self._active_side_led
         if active:
@@ -180,7 +192,14 @@ class VoiceChessGame:
                     "=== VOICE CHESS ===",
                     "LISTENING...",
                     "SPEAK YOUR COMMAND",
-                    "MOVE / VALIDATE",
+                    "",
+                )
+            elif context == "yes_no":
+                self.lcd.show(
+                    "GOOD GAME!",
+                    "ORGANIZE BOARD?",
+                    "SAY: YES OR NO",
+                    "LISTENING: YES/NO",
                 )
             elif context == "confirmation":
                 if self._last_confirm_lines:
@@ -193,7 +212,7 @@ class VoiceChessGame:
             self.leds.off(led_side)
 
     def _command_not_recognized(self, side: str = PLAYER) -> None:
-        """Chamado quando escuta a wake word mas nao reconhece o comando."""
+        """Chamado quando escuta a wake word mas nao reconhece o comando (ou comando bloqueado no estado)."""
         self.lcd.show(
             "NOT RECOGNIZED",
             "PLEASE TRY AGAIN",
@@ -222,15 +241,12 @@ class VoiceChessGame:
         elif isinstance(command, ActionCommand) and command.action == "RESIGN_GAME":
             speech = "resign game. Say yes or no."
             lines = ("RESIGN GAME?", "END CURRENT GAME", "SAY: YES OR NO", "")
-        elif isinstance(command, ActionCommand) and command.action == "ORGANIZE_BOARD":
-            speech = "organize board. Say yes or no."
-            lines = ("ORGANIZE BOARD?", "RESET ALL PIECES", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "MODE_PVE":
-            speech = "Player versus engine mode. Say yes or no."
-            lines = ("CONFIRM MODE?", "MODE: PVE (ENGINE)", "SAY: YES OR NO", "")
+            speech = "Option 2, Player versus engine mode. Say yes or no."
+            lines = ("CONFIRM MODE?", "2 - PVE (ENGINE)", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "MODE_PVP":
-            speech = "Player versus player mode. Say yes or no."
-            lines = ("CONFIRM MODE?", "MODE: PVP (2P)", "SAY: YES OR NO", "")
+            speech = "Option 1, Player versus player mode. Say yes or no."
+            lines = ("CONFIRM MODE?", "1 - PVP (2P)", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "COLOR_WHITE":
             speech = "White pieces. Say yes or no."
             lines = ("CONFIRM COLOR?", "COLOR: WHITE", "SAY: YES OR NO", "")
@@ -251,15 +267,19 @@ class VoiceChessGame:
     def _idle(self) -> None:
         self._active_side_led = PLAYER
         self.leds.off()
+        # Bloqueio: em IDLE, apenas START NEW GAME e permitido
+        self._set_allowed_commands(
+            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action == "NEW_GAME"
+        )
         save_logical_board_snapshot(self.planner.board, status_text="IDLE - Aguardando início")
+        idle_lcd = (
+            "=== VOICE CHESS ===",
+            "SAY: MAGNUS",
+            "START NEW GAME",
+            "TO BEGIN PLAY",
+        )
+        self.lcd.show(*idle_lcd)
         if self._first_run:
-            # LCD: **Nao alterar**
-            self.lcd.show(
-                "=== VOICE CHESS ===",
-                "SAY: MAGNUS",
-                "START NEW GAME",
-                "TO BEGIN PLAY",
-            )
             self.speaker.say(
                 "Welcome to Voice Chess. To start a new game, just say the wake word Magnus, "
                 "followed by the words Start new game.",
@@ -267,43 +287,24 @@ class VoiceChessGame:
             )
             self._first_run = False
         else:
-            self.lcd.show(
-                "START NEW GAME?",
-                "SAY: MAGNUS",
-                "START NEW GAME",
-                "OR ORGANIZE BOARD",
-            )
             self.speaker.say(
-                "Would you like to start a new game? Say Magnus start new game.",
+                "If you want to start a new game, just say the wake word Magnus, "
+                "followed by the words Start new game.",
                 wait=True,
             )
 
         while True:
             result = self.listener.listen()
-            if (result.confirmed and isinstance(result.command, ActionCommand)
-                    and result.command.action == "NEW_GAME"):
+            if (
+                result.confirmed
+                and isinstance(result.command, ActionCommand)
+                and result.command.action == "NEW_GAME"
+            ):
                 return
-            if (result.confirmed and isinstance(result.command, ActionCommand)
-                    and result.command.action == "ORGANIZE_BOARD"):
-                if not self._has_completed_game:
-                    self.lcd.show(
-                        "NOT AVAILABLE",
-                        "FINISH GAME FIRST",
-                        "SAY: MAGNUS",
-                        "START NEW GAME",
-                    )
-                    self.speaker.say(
-                        "Board organization is only available after finishing a game.",
-                        wait=True,
-                    )
-                    continue
-                self._organize_board()
-                self.lcd.show(
-                    "START NEW GAME?",
-                    "SAY: MAGNUS",
-                    "START NEW GAME",
-                    "OR ORGANIZE BOARD",
-                )
+            # Se tentou usar comando bloqueado fora de hora (ex: MOVE, OPTION, LEVEL, RESIGN)
+            if result.command is not None and not self._is_command_allowed(result.command):
+                self._command_not_recognized()
+                self.lcd.show(*idle_lcd)
                 continue
             # --- Caso reative a confirmacao (YES/NO) para o comando START NEW GAME: ---
             if result.command and not result.confirmed:
@@ -316,24 +317,19 @@ class VoiceChessGame:
                 self.speaker.say("Cancelled.", wait=True)
             elif result.wake_detected and not result.command:
                 self._command_not_recognized()
-                self.lcd.show(
-                    "=== VOICE CHESS ===",
-                    "SAY: MAGNUS",
-                    "START NEW GAME",
-                    "TO BEGIN PLAY",
-                )
+                self.lcd.show(*idle_lcd)
 
     def _configure(self) -> bool:
         """
         Fluxo de configuracao do menu:
-        1. Seleciona modo de jogo (Magnus PvP ou Magnus PvE).
+        1. Seleciona modo de jogo (Magnus Option 1 = PvP ou Magnus Option 2 = PvE).
         2. Se PvE:
            - Seleciona nivel de dificuldade (1 a 10): "Magnus Level <1-10>"
            - Seleciona cor das pecas: "Magnus White" ou "Magnus Black"
         """
         self._sync_settings_from_disk()
 
-        # ── Passo 1: Escolher Modo de Jogo (PvP ou PvE) ──────────────────────
+        # ── Passo 1: Escolher Modo de Jogo (Option 1 = PvP ou Option 2 = PvE) ──
         mode = self._prompt_game_mode()
         if mode is None:
             return False
@@ -372,15 +368,19 @@ class VoiceChessGame:
         return True
 
     def _prompt_game_mode(self) -> str | None:
-        """Pergunta ao jogador o modo de jogo: Magnus PvP ou Magnus PvE."""
+        """Pergunta ao jogador o modo de jogo: Magnus Option 1 (PvP) ou Magnus Option 2 (PvE)."""
+        # Bloqueio: apenas OPTION 1 (MODE_PVP) e OPTION 2 (MODE_PVE) sao permitidos
+        self._set_allowed_commands(
+            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action in ("MODE_PVP", "MODE_PVE")
+        )
         mode_lcd = (
             "SELECT GAME MODE",
-            "PvP:Player vs Player",
-            "PvE:Player vs Engine",
-            "Ex: Magnus PvE",
+            "1 - Player vs Player",
+            "2 - Player vs Engine",
+            "Ex: Magnus Option 2",
         )
         self.lcd.show(*mode_lcd)
-        self.speaker.say("Select the game mode. Say Magnus P V P, or Magnus P V E.", wait=True)
+        self.speaker.say("Select the game mode. Say Magnus Option 1, or Magnus Option 2.", wait=True)
 
         while True:
             result = self.listener.listen()
@@ -389,6 +389,10 @@ class VoiceChessGame:
             #     self.lcd.show(*mode_lcd)
             #     self.speaker.say("Cancelled.", wait=True)
             #     continue
+            if result.command is not None and not self._is_command_allowed(result.command):
+                self._command_not_recognized()
+                self.lcd.show(*mode_lcd)
+                continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
                 self.lcd.show(*mode_lcd)
@@ -402,14 +406,16 @@ class VoiceChessGame:
                     return "pvp"
                 if cmd.action == "MODE_PVE":
                     return "pve"
-                if cmd.action == "RESIGN_GAME":
-                    return None
 
             self.lcd.show(*mode_lcd)
-            self.speaker.say("Select the game mode. Say Magnus P V P, or Magnus P V E.", wait=True)
+            self.speaker.say("Select the game mode. Say Magnus Option 1, or Magnus Option 2.", wait=True)
 
     def _prompt_difficulty_level(self) -> int | None:
         """Pergunta o nivel de dificuldade entre 1 e 10 (Magnus Level <1-10>)."""
+        # Bloqueio: apenas LEVEL (1 a 10) e permitido nesta etapa
+        self._set_allowed_commands(
+            lambda cmd: isinstance(cmd, LevelCommand) and 1 <= cmd.level <= 10
+        )
         lvl_lcd = (
             "SELECT DIFFICULTY",
             "Level 1 - Very Easy",
@@ -429,6 +435,10 @@ class VoiceChessGame:
             #     self.lcd.show(*lvl_lcd)
             #     self.speaker.say("Cancelled.", wait=True)
             #     continue
+            if result.command is not None and not self._is_command_allowed(result.command):
+                self._command_not_recognized()
+                self.lcd.show(*lvl_lcd)
+                continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
                 self.lcd.show(*lvl_lcd)
@@ -439,8 +449,6 @@ class VoiceChessGame:
             cmd = result.command
             if isinstance(cmd, LevelCommand) and 1 <= cmd.level <= 10:
                 return cmd.level
-            if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
-                return None
 
             self.lcd.show(*lvl_lcd)
             self.speaker.say(
@@ -450,6 +458,10 @@ class VoiceChessGame:
 
     def _prompt_piece_color(self) -> bool | None:
         """Pergunta a cor das pecas do jogador no modo PvE (Magnus White ou Magnus Black)."""
+        # Bloqueio: apenas WHITE e BLACK sao permitidos nesta etapa
+        self._set_allowed_commands(
+            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action in ("COLOR_WHITE", "COLOR_BLACK")
+        )
         color_lcd = (
             "SELECT PIECE COLOR",
             "White",
@@ -469,6 +481,10 @@ class VoiceChessGame:
             #     self.lcd.show(*color_lcd)
             #     self.speaker.say("Cancelled.", wait=True)
             #     continue
+            if result.command is not None and not self._is_command_allowed(result.command):
+                self._command_not_recognized()
+                self.lcd.show(*color_lcd)
+                continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
                 self.lcd.show(*color_lcd)
@@ -482,8 +498,6 @@ class VoiceChessGame:
                     return chess.WHITE
                 if cmd.action == "COLOR_BLACK":
                     return chess.BLACK
-                if cmd.action == "RESIGN_GAME":
-                    return None
 
             self.lcd.show(*color_lcd)
             self.speaker.say(
@@ -501,6 +515,11 @@ class VoiceChessGame:
         self.planner.reset()
         if self.camera is None or not self.camera.is_ready:
             return True
+
+        # Bloqueio: durante a checagem inicial da camera, apenas MAGNUS VALIDATE e permitido
+        self._set_allowed_commands(
+            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE"
+        )
 
         while True:
             self.lcd.show(
@@ -542,6 +561,10 @@ class VoiceChessGame:
             # Aguarda o jogador dizer MAGNUS VALIDATE para verificar novamente
             while True:
                 result = self.listener.listen()
+                if result.command is not None and not self._is_command_allowed(result.command):
+                    self._command_not_recognized()
+                    self.lcd.show(*err_lcd)
+                    continue
                 if result.wake_detected and not result.command:
                     self._command_not_recognized()
                     self.lcd.show(*err_lcd)
@@ -551,8 +574,6 @@ class VoiceChessGame:
                 cmd = result.command
                 if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
                     break
-                if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
-                    return False
                 self.lcd.show(*err_lcd)
                 self.speaker.say(
                     "Please arrange the pieces in the starting positions and say Magnus Validate.",
@@ -610,9 +631,9 @@ class VoiceChessGame:
         if self.game_mode == "pvp":
             self.lcd.show(
                 "PVP GAME STARTED",
-                f"WHITE: {self.white_control.upper()}",
-                f"BLACK: {self.black_control.upper()}",
-                "WHITE TO MOVE",
+                "PLAYER VS PLAYER",
+                "WHITE MOVES FIRST",
+                "",
             )
             self.speaker.say("Player versus Player game started. White moves first.")
         else:
@@ -657,18 +678,21 @@ class VoiceChessGame:
         speech, lines = phrases.game_result(board)
         self.lcd.show(*lines)
         save_logical_board_snapshot(board, status_text=f"Fim de jogo: {lines[0]}")
+        celebrate_sec = getattr(cfg, "CELEBRATION_SECONDS", 8.0)
         if board.is_checkmate():
             winner_color = chess.BLACK if board.turn == chess.WHITE else chess.WHITE
             winner_side = PLAYER if winner_color == PLAYER_COLOR else COMPUTER
             loser_side = COMPUTER if winner_side == PLAYER else PLAYER
             self.speaker.say(speech, wait=False)
-            self.leds.celebrate(winner_side, loser_side, seconds=5.0)
+            self.leds.celebrate(winner_side, loser_side, seconds=celebrate_sec)
             self.speaker.wait_idle()
         else:
             # Empate / afogamento: speaker avisa e leds dos dois lados piscam em amarelo
             self.speaker.say(speech, wait=False)
-            self.leds.blink_both("yellow", seconds=5.0)
+            self.leds.blink_both("yellow", seconds=celebrate_sec)
             self.speaker.wait_idle()
+
+        self._post_game_flow()
 
     def _handle_resignation(self, resigning_color: bool) -> None:
         self._has_completed_game = True
@@ -680,32 +704,79 @@ class VoiceChessGame:
             self.lcd.show("BLACK RESIGNED", "WHITE WINS")
             msg = "Black resigned. White wins."
             winner_side, loser_side = PLAYER, COMPUTER
+        celebrate_sec = getattr(cfg, "CELEBRATION_SECONDS", 8.0)
         self.speaker.say(msg, wait=False)
-        self.leds.celebrate(winner_side, loser_side, seconds=5.0)
+        self.leds.celebrate(winner_side, loser_side, seconds=celebrate_sec)
         self.speaker.wait_idle()
+        self._post_game_flow()
+
+    def _post_game_flow(self) -> None:
+        """
+        Ao final da partida (apos a comemoracao):
+        Pergunta se o jogador gostaria que o sistema organizasse o tabuleiro e aguarda YES/NO.
+        """
+        self._active_side_led = PLAYER
+        prompt_lcd = (
+            "GOOD GAME!",
+            "ORGANIZE BOARD?",
+            "SAY: YES OR NO",
+            "",
+        )
+        self.lcd.show(*prompt_lcd)
+        self.speaker.say(
+            "It was a good game, would you like me to organize the board?",
+            wait=True,
+        )
+
+        while True:
+            if hasattr(self.listener, "listen_yes_no"):
+                answer = self.listener.listen_yes_no()
+            else:
+                answer = False
+            if answer is True:
+                self._organize_board()
+                return
+            if answer is False:
+                return
+            self.lcd.show(*prompt_lcd)
+            self.speaker.say(
+                "Please say yes or no. Would you like me to organize the board?",
+                wait=True,
+            )
+
+    def _is_active_game_command(self, cmd) -> bool:
+        """Durante a partida ativa, apenas MOVE, VALIDATE e RESIGN sao permitidos."""
+        return isinstance(cmd, MoveCommand) or (
+            isinstance(cmd, ActionCommand) and cmd.action in ("RESIGN_GAME", "VALIDATE_MOVE")
+        )
 
     def _manual_player_turn(self, turn_color: bool) -> bool:
         """
         Turno de um jogador em modo MANUAL:
-        O jogador move a peca fisicamente no tabuleiro e diz ``MAGNUS VALIDATE``.
+        O jogador move a peca fisicamente no tabuleiro e diz ``MAGNUS VALIDATE``
+        (ou fala o lance via ``MAGNUS MOVE``).
         Retorna True quando um lance valido foi confirmado e aplicado, ou False se desistiu.
         """
+        self._set_allowed_commands(self._is_active_game_command)
         side_led = self._side_led(turn_color)
         color_name = "WHITE" if turn_color == chess.WHITE else "BLACK"
         while True:
             self.lcd.show(
-                f"{color_name} (MANUAL)",
-                "MOVE PIECE ON BOARD",
-                "THEN SAY: MAGNUS",
-                "VALIDATE",
+                f"{color_name} TURN",
+                "SAY: MAGNUS MOVE",
+                "OR MAGNUS VALIDATE",
+                "",
             )
             result = self.listener.listen()
+            if result.command is not None and not self._is_command_allowed(result.command):
+                self._command_not_recognized(side=side_led)
+                continue
             if result.command and not result.confirmed:
                 self.lcd.show(
+                    "=== VOICE CHESS ===",
                     "CANCELLED",
-                    f"{color_name} (MANUAL)",
-                    "SAY: MAGNUS",
-                    "VALIDATE",
+                    f"{color_name} TURN",
+                    "SAY: MAGNUS MOVE",
                 )
                 self.speaker.say("Cancelled.", wait=False)
                 time.sleep(1.0)
@@ -765,17 +836,26 @@ class VoiceChessGame:
             self._command_not_recognized(side=side_led)
 
     def _player_move(self, turn_color: bool = chess.WHITE) -> chess.Move | None:
+        self._set_allowed_commands(self._is_active_game_command)
         side_led = self._side_led(turn_color)
         color_name = "WHITE" if turn_color == chess.WHITE else "BLACK"
         while True:
-            self.lcd.show(f"{color_name} TURN", "SAY: MAGNUS MOVE")
+            self.lcd.show(
+                f"{color_name} TURN",
+                "SAY: MAGNUS MOVE",
+                "OR MAGNUS VALIDATE",
+                "",
+            )
             result = self.listener.listen()
+            if result.command is not None and not self._is_command_allowed(result.command):
+                self._command_not_recognized(side=side_led)
+                continue
             if result.command and not result.confirmed:
                 self.lcd.show(
                     "=== VOICE CHESS ===",
                     "CANCELLED",
+                    f"{color_name} TURN",
                     "SAY: MAGNUS MOVE",
-                    "EX: MOVE E2 TO E4",
                 )
                 self.speaker.say("Cancelled.", wait=False)
                 time.sleep(1.0)

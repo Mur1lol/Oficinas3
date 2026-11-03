@@ -90,16 +90,6 @@ ACTIONS = {
         "resign",
         "surrender",
     ),
-    "ORGANIZE_BOARD": (
-        "organize board",
-        "organize pieces",
-        "organize",
-        "reset board",
-        "reset pieces",
-        "arrange board",
-        "arrange pieces",
-        "setup board",
-    ),
     "VALIDATE_MOVE": (
         "validate",
         "validate move",
@@ -107,7 +97,20 @@ ACTIONS = {
         "verify move",
         "verify",
     ),
+    "MODE_PVP": (
+        "option 1",
+        "option one",
+        "pvp",
+        "p v p",
+        "player versus player",
+        "player vs player",
+        "two players",
+        "versus player",
+        "multiplayer",
+    ),
     "MODE_PVE": (
+        "option 2",
+        "option two",
         "pve",
         "p v e",
         "player versus engine",
@@ -116,19 +119,10 @@ ACTIONS = {
         "player versus computer",
         "player versus machine",
         "against computer",
-        " against engine",
+        "against engine",
         "single player",
         "engine",
         "machine",
-    ),
-    "MODE_PVP": (
-        "pvp",
-        "p v p",
-        "player versus player",
-        "player vs player",
-        "two players",
-        "versus player",
-        "multiplayer",
     ),
     "MODE_MANUAL": (
         "manual",
@@ -173,6 +167,7 @@ IMMEDIATE_LEVEL = True
 
 MOVE_WORDS = {"move", "play"}
 LEVEL_WORDS = {"level", "difficulty"}
+OPTION_WORDS = {"option"}
 FILLERS = {
     "from",
     "to",
@@ -200,6 +195,13 @@ def parse(text: str, language: str | None = None) -> tuple[Command | None, str |
         if text in phrases:
             return ActionCommand(action), None
     tokens = text.split()
+    if tokens[0] in OPTION_WORDS:
+        rest = [DIGITS.get(t, t) for t in tokens[1:] if t not in FILLERS]
+        if rest == ["1"]:
+            return ActionCommand("MODE_PVP"), None
+        if rest == ["2"]:
+            return ActionCommand("MODE_PVE"), None
+        return None, "Expected option 1 or 2."
     if tokens[0] in LEVEL_WORDS:
         rest = [LEVEL_DIGITS.get(t, t) for t in tokens[1:] if t not in FILLERS]
         if len(rest) == 1 and rest[0] in VALID_LEVEL_STRS:
@@ -239,6 +241,7 @@ def grammar(stage: str, language: str = "en-US") -> list[str]:
     words = (
         MOVE_WORDS
         | LEVEL_WORDS
+        | OPTION_WORDS
         | FILLERS
         | set(LEVEL_DIGITS)
         | VALID_LEVEL_STRS

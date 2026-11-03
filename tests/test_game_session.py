@@ -84,13 +84,23 @@ class DummyGantry:
 
 
 class DummyListener:
-    def __init__(self, responses):
+    def __init__(self, responses, yes_no_responses=None):
         self.responses = list(responses)
+        self.yes_no_responses = list(yes_no_responses or [])
+        self._filter = None
+
+    def set_command_filter(self, fn):
+        self._filter = fn
 
     def listen(self):
         if self.responses:
             return self.responses.pop(0)
         return ListenResult(ActionCommand("NEW_GAME"), confirmed=True)
+
+    def listen_yes_no(self):
+        if self.yes_no_responses:
+            return self.yes_no_responses.pop(0)
+        return False
 
     def close(self):
         pass
@@ -114,11 +124,14 @@ def test_first_run_welcome_and_subsequent_prompt():
     assert game._first_run is False
     assert any("Welcome to Voice Chess" in s for s in speaker.spoken)
 
-    # Second execution of _idle
+    # Second execution of _idle (after a game)
     speaker.spoken.clear()
     game._idle()
     assert not any("Welcome to Voice Chess" in s for s in speaker.spoken)
-    assert any("Would you like to start a new game" in s for s in speaker.spoken)
+    assert any(
+        "If you want to start a new game, just say the wake word Magnus, followed by the words Start new game." in s
+        for s in speaker.spoken
+    )
 
 
 def test_check_notification_during_execute():
@@ -152,32 +165,37 @@ def test_check_notification_during_execute():
     assert ("off", COMPUTER) in leds.history
 
 
-def test_organize_board_command_availability():
+def test_post_game_organize_flow_and_command_locking():
     leds = DummyLeds()
     lcd = DummyLcd()
     speaker = DummySpeaker()
     gantry = DummyGantry()
 
-    # Case 1: Organize requested BEFORE any game is completed
-    listener = DummyListener([
-        ListenResult(ActionCommand("ORGANIZE_BOARD"), confirmed=True),
-        ListenResult(ActionCommand("NEW_GAME"), confirmed=True),
-    ])
+    # 1. Test command locking in _idle: MOVE, OPTION, RESIGN are rejected; only NEW_GAME succeeds
+    listener = DummyListener(
+        responses=[
+            ListenResult(MoveCommand("E2", "E4"), confirmed=True),
+            ListenResult(ActionCommand("MODE_PVE"), confirmed=True),
+            ListenResult(ActionCommand("RESIGN_GAME"), confirmed=True),
+            ListenResult(ActionCommand("NEW_GAME"), confirmed=True),
+        ],
+        yes_no_responses=[True],
+    )
     game = VoiceChessGame(leds, lcd, speaker, gantry, lambda *args: listener)
+    # Prepare a board with moves so _organize_board has work to do
+    game.planner.plan(chess.Move.from_uci("e2e4"))
+    gantry.executed.clear()
 
-    assert game._has_completed_game is False
     game._idle()
-    assert any("only available after finishing a game" in s for s in speaker.spoken)
-    assert len(gantry.executed) == 0
+    assert speaker.spoken.count("Command not recognized. Please try again.") == 3
 
-    # Case 2: Organize requested AFTER a game is completed
-    game._has_completed_game = True
+    # 2. Test post-game flow asking to organize board (YES -> organizes board)
     speaker.spoken.clear()
-    listener.responses = [
-        ListenResult(ActionCommand("ORGANIZE_BOARD"), confirmed=True),
-        ListenResult(ActionCommand("NEW_GAME"), confirmed=True),
-    ]
-    game._idle()
+    game._post_game_flow()
+    assert any(
+        "It was a good game, would you like me to organize the board?" in s
+        for s in speaker.spoken
+    )
     assert any("Organizing board" in s for s in speaker.spoken)
     assert any("Board organized" in s for s in speaker.spoken)
     assert len(gantry.executed) > 0

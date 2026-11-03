@@ -74,10 +74,22 @@ class VoiceListener:
         elif state in (S.WAKE_WORD_LISTEN, S.EMIT, S.ERROR, S.IDLE):
             self._on_listening(False, "")
 
+    def set_command_filter(self, fn: Callable[[object], bool] | None) -> None:
+        self._pipeline.command_filter = fn
+
     def listen(self) -> ListenResult:
         self._before_listen()
         result = self._pipeline.listen_once(self._stream)
         return ListenResult(result.command, result.confirmed, result.reason, result.wake_detected)
+
+    def listen_yes_no(self) -> bool | None:
+        self._before_listen()
+        self._stream.discard_pending()
+        self._on_listening(True, "yes_no")
+        try:
+            return self._pipeline.listen_yes_no(self._stream)
+        finally:
+            self._on_listening(False, "")
 
     def close(self) -> None:
         self._ctx.__exit__(None, None, None)
@@ -90,6 +102,10 @@ class TextListener:
         self._on_listening = on_listening
         self._on_confirm = on_confirm
         self._before_listen = before_listen
+        self._command_filter: Callable[[object], bool] | None = None
+
+    def set_command_filter(self, fn: Callable[[object], bool] | None) -> None:
+        self._command_filter = fn
 
     def listen(self) -> ListenResult:
         self._before_listen()
@@ -108,6 +124,14 @@ class TextListener:
             return ListenResult(command, reason=checked["reason"], wake_detected=True)
         self._on_listening(False, "")
 
+        if self._command_filter is not None and not self._command_filter(command):
+            return ListenResult(
+                command,
+                confirmed=False,
+                reason="Command not allowed in current state",
+                wake_detected=True,
+            )
+
         # Comandos imediatos nao pedem confirmacao YES/NO (deixe comentado caso mude de ideia):
         if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
             isinstance(command, LevelCommand) and IMMEDIATE_LEVEL
@@ -123,6 +147,17 @@ class TextListener:
             return ListenResult(command, confirmed=True, wake_detected=True)
         return ListenResult(command, reason="Command cancelled" if confirmed is False
                             else "Confirmation missing or ambiguous", wake_detected=True)
+
+    def listen_yes_no(self) -> bool | None:
+        self._before_listen()
+        self._on_listening(True, "yes_no")
+        try:
+            answer = input("[voz] responda (yes/no): ")
+        except EOFError:
+            raise KeyboardInterrupt
+        finally:
+            self._on_listening(False, "")
+        return parse_confirmation(answer, "en-US")
 
     def close(self) -> None:
         pass

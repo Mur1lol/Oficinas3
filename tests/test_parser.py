@@ -75,13 +75,11 @@ ACTION_SUCCESS_CASES = [
     ("resign game", "RESIGN_GAME"),
     ("resign", "RESIGN_GAME"),
     ("surrender", "RESIGN_GAME"),
-    # ORGANIZE BOARD (EN)
-    ("organize board", "ORGANIZE_BOARD"),
-    ("organize pieces", "ORGANIZE_BOARD"),
-    ("reset board", "ORGANIZE_BOARD"),
-    ("reset pieces", "ORGANIZE_BOARD"),
-    ("arrange board", "ORGANIZE_BOARD"),
-    ("setup board", "ORGANIZE_BOARD"),
+    # GAME MODE OPTIONS (MAGNUS OPTION 1 / 2)
+    ("option 1", "MODE_PVP"),
+    ("option one", "MODE_PVP"),
+    ("option 2", "MODE_PVE"),
+    ("option two", "MODE_PVE"),
 ]
 
 

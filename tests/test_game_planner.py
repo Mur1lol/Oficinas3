@@ -121,3 +121,29 @@ def test_reorganize_both_colors_returns_all_pieces_home():
         assert planner.board.piece_at(sq) == starting.piece_at(sq)
 
 
+def test_reorganize_prioritizes_non_pawns_before_pawns(monkeypatch):
+    planner = MovePlanner()
+    moves = ["e2e4", "d7d5", "g1f3", "b8c6", "f1c4", "c8g4"]
+    for m in moves:
+        planner.plan(chess.Move.from_uci(m))
+
+    carried_destinations = []
+    orig_carry = planner._carry
+
+    def record_carry(src, dst):
+        carried_destinations.append((src, dst))
+        return orig_carry(src, dst)
+
+    monkeypatch.setattr(planner, "_carry", record_carry)
+    planner.plan_reorganize()
+
+    # Identify when each final home row (0 or 7 = nobles, 1 or 6 = pawns) was populated
+    noble_indices = [i for i, (_, dst) in enumerate(carried_destinations) if dst[0] in (0, 7)]
+    pawn_indices = [i for i, (_, dst) in enumerate(carried_destinations) if dst[0] in (1, 6)]
+
+    assert len(noble_indices) > 0
+    assert len(pawn_indices) > 0
+    # Every misplaced noble is placed on row 0/7 BEFORE any misplaced pawn is placed on row 1/6
+    assert max(noble_indices) < min(pawn_indices)
+
+

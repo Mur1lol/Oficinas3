@@ -58,6 +58,7 @@ LED_PINS = {
 }
 LED_ACTIVE_HIGH = True    # catodo comum (PCB D: pino K no GND)
 BLINK_ERROR_SECONDS = 3.0
+CELEBRATION_SECONDS = 8.0 # tempo de comemoracao no final da partida
 BLINK_HZ = 2.0
 
 # ── LCDs 20x4 I2C (um por painel, o mesmo texto nos dois) ─────────────────────

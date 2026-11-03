@@ -416,12 +416,20 @@ class MovePlanner:
             for cell, pt in white_nobles.items():
                 all_targets[cell] = (chess.WHITE, pt)
 
-        def find_empty_temp_square() -> tuple[int, int]:
+        def find_empty_temp_square(near_cell: tuple[int, int] | None = None) -> tuple[int, int]:
+            candidates: list[tuple[int, int]] = []
             for r in range(2, 6):
                 for c in range(COL_BOARD_START, COL_BOARD_END + 1):
                     if self.logic.grid[r][c] == EMPTY:
-                        return (r, c)
-            raise PlanningError("Nenhuma casa livre para manobra encontrada.")
+                        candidates.append((r, c))
+            if not candidates:
+                raise PlanningError("Nenhuma casa livre para manobra encontrada.")
+            if near_cell is None:
+                return candidates[0]
+            return min(
+                candidates,
+                key=lambda cell: abs(cell[0] - near_cell[0]) + abs(cell[1] - near_cell[1]),
+            )
 
         # Se organizando apenas uma cor, limpa pecas da outra cor que estejam nas fileiras alvo
         if color is not None:
@@ -431,7 +439,7 @@ class MovePlanner:
                 if p and p.color != color:
                     cell = square_to_cell(sq)
                     if cell[0] in target_rows:
-                        temp = find_empty_temp_square()
+                        temp = find_empty_temp_square(near_cell=cell)
                         self._carry(cell, temp)
                         self.board.remove_piece_at(sq)
                         temp_sq = chess.square(10 - temp[1], 7 - temp[0])
@@ -471,7 +479,7 @@ class MovePlanner:
                 })
                 pid += 1
 
-        # 3. Atribuicao dos alvos:
+        # 3. Atribuicao otimizada dos alvos (menor distancia Manhattan entre posicao atual e casa inicial):
         unassigned = dict(all_targets)
         for p in pieces:
             if not p["is_cem"] and p["curr"] in unassigned:
@@ -480,45 +488,107 @@ class MovePlanner:
                     p["target"] = p["curr"]
                     del unassigned[p["curr"]]
 
-        for p in pieces:
-            if p["target"] is None:
-                matched = None
+        # Agrupa pecas sem alvo por (color, type) e associa cada uma ao alvo livre mais proximo
+        unassigned_pieces = [p for p in pieces if p["target"] is None]
+        while unassigned_pieces:
+            best_pair = None
+            best_dist = float("inf")
+            for p in unassigned_pieces:
                 for tgt, (tc, tt) in unassigned.items():
                     if tc == p["color"] and tt == p["type"]:
-                        matched = tgt
-                        break
-                if matched is None:
-                    raise PlanningError(f"Nao foi possivel alocar alvo para peca {p['type']}.")
-                p["target"] = matched
-                del unassigned[matched]
+                        dist = abs(p["curr"][0] - tgt[0]) + abs(p["curr"][1] - tgt[1])
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_pair = (p, tgt)
+            if best_pair is None:
+                p0 = unassigned_pieces[0]
+                raise PlanningError(f"Nao foi possivel alocar alvo para peca {p0['type']}.")
+            p_sel, tgt_sel = best_pair
+            p_sel["target"] = tgt_sel
+            del unassigned[tgt_sel]
+            unassigned_pieces.remove(p_sel)
 
-        # 4. Mover pecas para os alvos
+        # 4. Mover pecas para os alvos com:
+        #    a) Prioridade para pecas que NAO sao peoes (Nobres nas linhas 0 e 7 primeiro,
+        #       evitando que peoes nas linhas 1 e 6 fechem a passagem e forcem o Gantry a andar pelos vaos).
+        #    b) Rota gulosa (nearest-neighbor) a partir da posicao atual do Gantry (iniciando em 0,0).
+        def _robot_dist_to_cell(cell: tuple[int, int]) -> int:
+            pr, pc = cell[0] * 2, cell[1] * 2
+            return abs(self.robot_phys[0] - pr) + abs(self.robot_phys[1] - pc)
+
+        def _candidate_score(p: dict) -> tuple[int, int, int]:
+            tgt = p["target"]
+            # Se for nobre (linha 0 ou 7) e a casa de peao logo a frente ja estiver ocupada,
+            # prioriza encaixar esse nobre antes que as casas laterais da fileira fechem o caminho aberto.
+            front_row = 1 if tgt[0] == 0 else (6 if tgt[0] == 7 else None)
+            front_occupied_priority = (
+                0 if (front_row is not None and self.logic.grid[front_row][tgt[1]] != EMPTY) else 1
+            )
+            dist_to_pickup = _robot_dist_to_cell(p["curr"])
+            carry_dist = (abs(p["curr"][0] - tgt[0]) + abs(p["curr"][1] - tgt[1])) * 2
+            return (front_occupied_priority, dist_to_pickup, carry_dist)
+
+        def _move_piece_to(p: dict, dest: tuple[int, int]) -> None:
+            self._carry(p["curr"], dest)
+            if p["is_cem"]:
+                del self.cem_occ[p["curr"]]
+                p["is_cem"] = False
+            p["curr"] = dest
+
         home_rows = (0, 1, 6, 7) if color is None else ((0, 1) if color == chess.BLACK else (6, 7))
         while True:
             pieces_to_move = [p for p in pieces if p["curr"] != p["target"]]
             if not pieces_to_move:
                 break
 
-            moved_any = False
-            for p in pieces_to_move:
-                tgt = p["target"]
-                if self.logic.grid[tgt[0]][tgt[1]] == EMPTY:
-                    self._carry(p["curr"], tgt)
-                    if p["is_cem"]:
-                        del self.cem_occ[p["curr"]]
-                        p["is_cem"] = False
-                    p["curr"] = tgt
-                    moved_any = True
-                    break
+            nobles_to_move = [p for p in pieces_to_move if p["type"] != chess.PAWN]
+            pawns_to_move = [p for p in pieces_to_move if p["type"] == chess.PAWN]
 
-            if not moved_any:
-                p = next((p for p in pieces_to_move if p["curr"][0] in home_rows), pieces_to_move[0])
-                temp = find_empty_temp_square()
-                self._carry(p["curr"], temp)
-                if p["is_cem"]:
-                    del self.cem_occ[p["curr"]]
-                    p["is_cem"] = False
-                p["curr"] = temp
+            # Fase A: Enquanto houver pecas nobres (nao-peoes) fora do lugar, prioriza elas!
+            if nobles_to_move:
+                ready_nobles = [
+                    p for p in nobles_to_move
+                    if self.logic.grid[p["target"][0]][p["target"][1]] == EMPTY
+                ]
+                if ready_nobles:
+                    best_noble = min(ready_nobles, key=_candidate_score)
+                    _move_piece_to(best_noble, best_noble["target"])
+                    continue
+
+                # Todos os alvos dos nobres pendentes estao ocupados por alguma peca bloqueadora
+                noble_target_cells = {p["target"] for p in nobles_to_move}
+                blockers = [p for p in pieces_to_move if p["curr"] in noble_target_cells]
+                if not blockers:
+                    blockers = nobles_to_move
+                blocker = min(blockers, key=lambda p: _robot_dist_to_cell(p["curr"]))
+                # Se o bloqueador for um peao (ou seu alvo estiver ocupado), move para casa temporaria livre
+                # no centro do tabuleiro (linhas 2..5) para nao fechar a linha de peoes antes da hora
+                if (
+                    blocker["type"] != chess.PAWN
+                    and self.logic.grid[blocker["target"][0]][blocker["target"][1]] == EMPTY
+                ):
+                    _move_piece_to(blocker, blocker["target"])
+                else:
+                    temp = find_empty_temp_square(near_cell=blocker["target"])
+                    _move_piece_to(blocker, temp)
+                continue
+
+            # Fase B: Todos os nobres ja estao nas casas iniciais -> organiza os peoes pela melhor rota
+            ready_pawns = [
+                p for p in pawns_to_move
+                if self.logic.grid[p["target"][0]][p["target"][1]] == EMPTY
+            ]
+            if ready_pawns:
+                best_pawn = min(ready_pawns, key=_candidate_score)
+                _move_piece_to(best_pawn, best_pawn["target"])
+                continue
+
+            # Se nenhum peao tem alvo livre (ex: peoes trocados), libera o mais proximo do robo
+            in_home_blockers = [p for p in pawns_to_move if p["curr"][0] in home_rows]
+            candidates_to_clear = in_home_blockers if in_home_blockers else pawns_to_move
+            blocker = min(candidates_to_clear, key=lambda p: _robot_dist_to_cell(p["curr"]))
+            temp = find_empty_temp_square(near_cell=blocker["target"])
+            _move_piece_to(blocker, temp)
 
         # 5. Atualiza o estado do tabuleiro de xadrez
         if color is None:
