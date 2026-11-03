@@ -1508,6 +1508,11 @@ def make_handler(app: WebCalibratorApp):
                 self.wfile.write(data)
             elif path == "/api/snapshot":
                 self._jpeg(app.get_frame())
+            elif path == "/api/raw_camera":
+                if app.has_real_camera():
+                    self._jpeg(app.get_frame(), 85)
+                else:
+                    self.send_error(503, "No physical camera connected")
             elif path == "/api/snapshot_warped":
                 self._jpeg(app.compute_live_warped(), 85)
             elif path == "/api/status":

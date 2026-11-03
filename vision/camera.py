@@ -4,26 +4,26 @@ vision/camera.py
 USB camera control for the VoiceChess vision subsystem.
 
 Wraps OpenCV's VideoCapture into a context manager with warmup,
-retry logic, and quality validation. Also supports transparent frame
-sharing when ``web_calibrator.py`` is running simultaneously on the
-same machine (avoiding V4L2/DirectShow single-process device locks).
-
-Usage
------
-    from vision.camera import CameraController
-
-    with CameraController() as cam:
-        frame = cam.capture()           # -> np.ndarray (BGR)
-        frame = cam.capture_with_retry()  # -> np.ndarray | None
+retry logic, and quality validation. Also supports:
+- Auto-discovery of USB cameras on Linux/Raspberry Pi via ``/dev/v4l/by-id/``
+  and ``/sys/class/video4linux/``
+- Clean diagnostics when the USB camera is unplugged or locked by another PID
+- Transparent frame sharing when ``web_calibrator.py`` is actively streaming
+  from the real camera on the same machine.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
+
+# Suppress OpenCV C++ V4L2/obsensor stderr spam before importing cv2
+os.environ.setdefault("OPENCV_LOG_LEVEL", "OFF")
 
 import cv2
 import numpy as np
@@ -31,6 +31,111 @@ import numpy as np
 from . import config as cfg
 
 log = logging.getLogger(__name__)
+
+
+@contextmanager
+def _quiet_opencv():
+    """Temporarily silence OpenCV C++ warnings/errors during device probing."""
+    prev = None
+    try:
+        if hasattr(cv2, "setLogLevel"):
+            prev = cv2.getLogLevel()
+            cv2.setLogLevel(0)
+        elif hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+            prev = cv2.utils.logging.getLogLevel()
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+    except Exception:
+        prev = None
+    try:
+        yield
+    finally:
+        if prev is not None:
+            try:
+                if hasattr(cv2, "setLogLevel"):
+                    cv2.setLogLevel(prev)
+                elif hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+                    cv2.utils.logging.setLogLevel(prev)
+            except Exception:
+                pass
+
+
+def diagnose_linux_cameras() -> tuple[list[int], str]:
+    """
+    Inspect ``/dev/v4l/by-id`` and ``/sys/class/video4linux`` on Linux/Pi.
+
+    Returns
+    -------
+    tuple[list[int], str]
+        (ordered list of candidate video device indices, human-readable diagnostic summary)
+    """
+    if sys.platform == "win32":
+        return [0, 1, 2], "Windows DirectShow"
+
+    usb_indices: list[int] = []
+    usb_names: list[str] = []
+
+    by_id = Path("/dev/v4l/by-id")
+    if by_id.is_dir():
+        for link in sorted(by_id.iterdir()):
+            if "index0" in link.name or "video" in link.name:
+                try:
+                    target = link.resolve().name  # e.g. "video0"
+                    if target.startswith("video") and target[5:].isdigit():
+                        idx = int(target[5:])
+                        if idx not in usb_indices:
+                            usb_indices.append(idx)
+                            usb_names.append(f"/dev/{target} ({link.name})")
+                except Exception:
+                    pass
+
+    v4l_sys = Path("/sys/class/video4linux")
+    all_nodes: list[str] = []
+    if v4l_sys.is_dir():
+        for node in sorted(v4l_sys.iterdir()):
+            if not (node.name.startswith("video") and node.name[5:].isdigit()):
+                continue
+            idx = int(node.name[5:])
+            try:
+                name = (node / "name").read_text(encoding="utf-8").strip()
+            except Exception:
+                name = "unknown"
+            all_nodes.append(f"/dev/{node.name}={name}")
+            # Skip Raspberry Pi internal SoC codec/ISP nodes (video10..video31)
+            if any(k in name.lower() for k in ("bcm2835", "rpi-", "pisp", "hevc", "isp")):
+                continue
+            if idx not in usb_indices:
+                usb_indices.append(idx)
+                usb_names.append(f"/dev/{node.name} ({name})")
+
+    # Check if any process is currently holding /dev/video* open
+    holders: list[str] = []
+    proc_root = Path("/proc")
+    if proc_root.is_dir():
+        my_pid = str(os.getpid())
+        for p in proc_root.iterdir():
+            if not p.name.isdigit() or p.name == my_pid:
+                continue
+            fd_dir = p / "fd"
+            try:
+                for fd in fd_dir.iterdir():
+                    target = os.readlink(fd)
+                    if target.startswith("/dev/video"):
+                        cmdline = (p / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+                        holders.append(f"PID {p.name} ({cmdline or 'process'}) usando {target}")
+                        break
+            except Exception:
+                continue
+
+    if not usb_indices:
+        msg = "Nenhuma webcam USB encontrada em /dev/v4l/by-id ou /dev/video* (verifique o cabo USB com 'lsusb')."
+        if all_nodes:
+            msg += f" Nós internos encontrados: {', '.join(all_nodes[:5])}"
+        return [0, 1, 2], msg
+
+    msg = f"Câmeras USB detectadas: {', '.join(usb_names)}."
+    if holders:
+        msg += f" Em uso por: {'; '.join(holders)}."
+    return usb_indices, msg
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +180,7 @@ class CameraController:
         self._cap: cv2.VideoCapture | None = None
         self._using_web_bridge: bool = False
         self._state = CameraState.IDLE
+        self.last_error_detail: str = ""
 
     # ------------------------------------------------------------------
     # Context manager
@@ -97,41 +203,44 @@ class CameraController:
             return
 
         self._using_web_bridge = False
+        discovered, diag_msg = diagnose_linux_cameras()
+        candidates = [self._device_index] + [i for i in discovered if i != self._device_index]
+
         log.info(
-            "[Camera] Opening device %d at %dx%d ...",
-            self._device_index, *self._resolution,
+            "[Camera] Opening device %d (candidates=%s) ...",
+            self._device_index, candidates,
         )
 
-        # Try preferred device index first, then fallback indices [0, 1, 2]
-        candidates = [self._device_index] + [i for i in (0, 1, 2) if i != self._device_index]
-        for idx in candidates:
-            cap = self._try_open_index(idx)
-            if cap is not None and cap.isOpened():
-                self._cap = cap
-                self._device_index = idx
-                break
+        with _quiet_opencv():
+            for idx in candidates:
+                cap = self._try_open_index(idx)
+                if cap is not None and cap.isOpened():
+                    self._cap = cap
+                    self._device_index = idx
+                    break
 
         if self._cap is None or not self._cap.isOpened():
-            # Check if web_calibrator.py is running on localhost:5000 holding the camera
+            # Check if web_calibrator.py is running on localhost:5000 with a REAL camera open
             if self._allow_web_bridge and self._fetch_web_bridge_frame() is not None:
                 self._using_web_bridge = True
                 log.info(
-                    "[Camera] USB camera is in use by web_calibrator — "
-                    "bridging live frames via http://127.0.0.1:5000/api/snapshot"
+                    "[Camera] USB camera is open in web_calibrator — "
+                    "bridging live frames via http://127.0.0.1:5000/api/raw_camera"
                 )
                 return
 
+            self.last_error_detail = diag_msg
             raise RuntimeError(
-                f"[Camera] Failed to open device {self._device_index}. "
-                "Check that the USB camera is connected and not locked by another process."
+                f"[Camera] Failed to open USB camera (tried {candidates}). {diag_msg}"
             )
 
         # Set resolution
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self._resolution[0])
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._resolution[1])
+        with _quiet_opencv():
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self._resolution[0])
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._resolution[1])
 
-        actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         log.info("[Camera] Actual resolution (device %d): %dx%d", self._device_index, actual_w, actual_h)
 
         # Warmup: discard frames until auto-exposure stabilises
@@ -147,18 +256,24 @@ class CameraController:
         else:
             cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
             if cap is not None and cap.isOpened():
-                return cap
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    return cap
+                cap.release()
         cap = cv2.VideoCapture(idx)
         if cap is not None and cap.isOpened():
-            return cap
-        if cap is not None:
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                return cap
             cap.release()
         return None
 
     @staticmethod
-    def _fetch_web_bridge_frame(url: str = "http://127.0.0.1:5000/api/snapshot") -> np.ndarray | None:
+    def _fetch_web_bridge_frame(url: str = "http://127.0.0.1:5000/api/raw_camera") -> np.ndarray | None:
         try:
-            with urllib.request.urlopen(url, timeout=1.5) as resp:
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
+                if resp.status != 200:
+                    return None
                 data = resp.read()
             arr = np.frombuffer(data, dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
