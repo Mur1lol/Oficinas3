@@ -356,13 +356,11 @@ class VoiceChessGame:
 
         self.player_color = color
         if color == chess.WHITE:
-            if self.white_control == "computer":
-                self.white_control = "voice"
+            self.white_control = "voice"
             self.black_control = "computer"
         else:
             self.white_control = "computer"
-            if self.black_control == "computer":
-                self.black_control = "voice"
+            self.black_control = "voice"
 
         self._persist_settings()
         return True
