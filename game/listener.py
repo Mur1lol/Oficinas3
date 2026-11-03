@@ -5,6 +5,9 @@ Fonte de comandos do jogador, sempre no fluxo:
 
     MAGNUS (wake word) -> comando -> [speaker repete + LCD] -> SIM/NAO
 
+Comandos imediatos (ex.: ``MAGNUS VALIDATE``) sao emitidos direto apos o comando
+para acionar a camera sem pedir confirmacao extra.
+
 Callbacks fornecidos pelo jogo:
     on_listening(bool) : True enquanto escuta o comando/confirmacao (LED AZUL)
     on_confirm(cmd)    : fala o comando no speaker e mostra no LCD (bloqueante)
@@ -19,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from voice.parser import normalize, parse, parse_confirmation
+from voice.parser import ActionCommand, IMMEDIATE_ACTIONS, normalize, parse, parse_confirmation
 from voice.validator import validate
 
 
@@ -71,7 +74,7 @@ class VoiceListener:
 
 
 class TextListener:
-    """Mesmo fluxo, digitado: 'magnus move e2 e4' e depois 'yes'/'no'."""
+    """Mesmo fluxo, digitado: 'magnus move e2 e4' (ou 'magnus validate') e depois 'yes'/'no'."""
 
     def __init__(self, on_listening, on_confirm, before_listen=lambda: None) -> None:
         self._on_listening = on_listening
@@ -81,7 +84,7 @@ class TextListener:
     def listen(self) -> ListenResult:
         self._before_listen()
         try:
-            text = input("\n[voz] diga o comando (ex.: 'magnus move e2 e4'): ")
+            text = input("\n[voz] diga o comando (ex.: 'magnus move e2 e4' ou 'magnus validate'): ")
         except EOFError:
             raise KeyboardInterrupt
         text = normalize(text)
@@ -94,6 +97,8 @@ class TextListener:
             self._on_listening(False, "")
             return ListenResult(command, reason=checked["reason"], wake_detected=True)
         self._on_listening(False, "")
+        if isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS:
+            return ListenResult(command, confirmed=True, wake_detected=True)
         self._on_confirm(command)
         self._on_listening(True, "confirmation")
         answer = input("[voz] confirma? (yes/no): ")

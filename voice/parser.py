@@ -94,7 +94,45 @@ ACTIONS = {
         "arrange pieces",
         "setup board",
     ),
+    "VALIDATE_MOVE": (
+        "validate",
+        "validate move",
+        "check move",
+        "verify move",
+        "verify",
+    ),
+    "MODE_PVE": (
+        "pve",
+        "p v e",
+        "player versus computer",
+        "player versus machine",
+        "against computer",
+        "single player",
+        "machine",
+    ),
+    "MODE_PVP": (
+        "pvp",
+        "p v p",
+        "player versus player",
+        "two players",
+        "versus player",
+        "multiplayer",
+    ),
+    "MODE_MANUAL": (
+        "manual",
+        "manual mode",
+        "hand mode",
+    ),
+    "MODE_VOICE": (
+        "voice",
+        "voice mode",
+        "automatic",
+        "gantry mode",
+    ),
 }
+
+# Actions that execute immediately after "MAGNUS <ACTION>" without requiring YES/NO confirmation
+IMMEDIATE_ACTIONS = {"VALIDATE_MOVE"}
 
 MOVE_WORDS = {"move", "play"}
 LEVEL_WORDS = {"level", "difficulty"}

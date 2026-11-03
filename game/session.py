@@ -1,13 +1,22 @@
 """
 game/session.py
 ===============
-Fluxo da partida Jogador (brancas) x Maquina (pretas) com o Gantry.
+Fluxo da partida do VoiceChess (PvE: Jogador x Maquina | PvP: Jogador x Jogador)
+com integracao do Gantry e do Sistema de Visao (CameraSystem).
 
-    IDLE        espera "MAGNUS START NEW GAME"
-    CONFIGURE   escolhe a dificuldade por voz ("MAGNUS LEVEL <1-8>")
-    CONNECT     conecta no ESP32 e faz o homing
-    PLAY        alterna: jogador (voz) / maquina (Stockfish); todo lance vai ao Gantry
-    END         resultado no speaker + LCD, volta ao IDLE
+Modos de Jogo e Camera
+----------------------
+* **PvE (Jogador vs Maquina)**:
+  - O Gantry move as pecas no tabuleiro.
+  - Sempre que o Gantry termina um movimento, a camera captura uma foto
+    (``camera.verify_gantry_position``) para verificar se as pecas estao na
+    posicao correta.
+* **PvP (Jogador vs Jogador)**:
+  - Cada lado (Brancas / Pretas) pode jogar em modo **Voz/Gantry** (``"voice"``)
+    ou **Manual** (``"manual"``).
+  - No modo **Manual**, o jogador move a peca fisicamente na mao e diz
+    ``MAGNUS VALIDATE``; o sistema captura uma foto, valida se o lance e legal
+    ou invalido e, sendo valido, anuncia em voz alta qual foi o lance jogado.
 
 Regras de LED
     - AZUL    : sempre que o usuario diz MAGNUS, enquanto escuta comando/confirmacao
@@ -30,6 +39,7 @@ import time
 import chess
 import chess.engine
 
+from vision.board_verifier import GameSettings, save_logical_board_snapshot
 from voice.parser import ActionCommand, LevelCommand, MoveCommand
 
 from . import config as cfg
@@ -39,8 +49,8 @@ from .planner import MovePlanner, PlanningError
 
 log = logging.getLogger(__name__)
 
-PLAYER, COMPUTER = "player", "computer"      # lados / LEDs
-PLAYER_COLOR = chess.WHITE                   # por enquanto o jogador joga de brancas
+PLAYER, COMPUTER = "player", "computer"      # lados / LEDs (player=painel Brancas, computer=painel Pretas)
+PLAYER_COLOR = chess.WHITE                   # painel "player" corresponde as Brancas
 
 
 class GameAbort(RuntimeError):
@@ -48,19 +58,79 @@ class GameAbort(RuntimeError):
 
 
 class VoiceChessGame:
-    def __init__(self, leds, lcd, speaker, gantry, listener_factory,
-                 stockfish_path: str | None = None, return_home: bool = True) -> None:
+    def __init__(
+        self,
+        leds,
+        lcd,
+        speaker,
+        gantry,
+        listener_factory,
+        stockfish_path: str | None = None,
+        return_home: bool = True,
+        camera=None,
+        game_mode: str | None = None,
+        white_control: str | None = None,
+        black_control: str | None = None,
+    ) -> None:
         self.leds, self.lcd, self.speaker, self.gantry = leds, lcd, speaker, gantry
+        self.camera = camera
         self.planner = MovePlanner(return_home=return_home)
-        self.level = cfg.DEFAULT_LEVEL
+
+        settings = GameSettings.load()
+        self.level = settings.level if settings.level else cfg.DEFAULT_LEVEL
+        self.game_mode = (game_mode or settings.game_mode or "pve").lower()
+        self.white_control = (white_control or settings.white_control or "voice").lower()
+        self.black_control = (
+            black_control
+            or (settings.black_control if self.game_mode == "pvp" else "computer")
+        ).lower()
+        self.verify_gantry_moves = settings.verify_gantry_moves
+
+        self._explicit_mode_overrides = (
+            game_mode is not None or white_control is not None or black_control is not None
+        )
         self._stockfish_path = stockfish_path or cfg.find_stockfish()
         self._engine: chess.engine.SimpleEngine | None = None
         self._gantry_connected = False
         self._last_confirm_lines: tuple[str, ...] = ()
         self._first_run = True
         self._has_completed_game = False
-        self.listener = listener_factory(self._on_listening, self._on_confirm,
-                                         self.speaker.wait_idle)
+        self._active_side_led = PLAYER
+        self.listener = listener_factory(
+            self._on_listening, self._on_confirm, self.speaker.wait_idle
+        )
+
+    def _side_led(self, color: bool) -> str:
+        """Retorna o identificador do LED ('player' p/ Brancas, 'computer' p/ Pretas)."""
+        return PLAYER if color == chess.WHITE else COMPUTER
+
+    def _control_for(self, color: bool) -> str:
+        """Retorna 'voice', 'manual' ou 'computer' para o lado especificado."""
+        if color == chess.WHITE:
+            return self.white_control
+        if self.game_mode == "pve":
+            return "computer"
+        return self.black_control
+
+    def _sync_settings_from_disk(self) -> None:
+        """Recarrega as configuracoes salvas pela interface web."""
+        if self._explicit_mode_overrides:
+            return
+        s = GameSettings.load()
+        self.game_mode = s.game_mode
+        self.level = s.level
+        self.white_control = s.white_control
+        self.black_control = s.black_control
+        self.verify_gantry_moves = s.verify_gantry_moves
+
+    def _persist_settings(self) -> None:
+        s = GameSettings.load()
+        s.game_mode = self.game_mode
+        s.level = self.level
+        s.white_control = self.white_control
+        s.black_control = "computer" if self.game_mode == "pve" else self.black_control
+        s.verify_gantry_moves = self.verify_gantry_moves
+        s.save()
 
     # ------------------------------------------------------------------
     # Loop principal
@@ -73,7 +143,8 @@ class VoiceChessGame:
                 try:
                     if not self._configure():
                         continue
-                    self._connect_gantry()
+                    if self._needs_gantry():
+                        self._connect_gantry()
                     self._play()
                 except GameAbort as exc:
                     self._show_abort(str(exc))
@@ -84,8 +155,20 @@ class VoiceChessGame:
         finally:
             self.close()
 
+    def _needs_gantry(self) -> bool:
+        """Retorna True se pelo menos um lado usa o Gantry (voice ou computer)."""
+        return (
+            self._control_for(chess.WHITE) in ("voice", "computer")
+            or self._control_for(chess.BLACK) in ("voice", "computer")
+        )
+
     def close(self) -> None:
         self._stop_engine()
+        if self.camera is not None:
+            try:
+                self.camera.shutdown()
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("Erro ao encerrar camera: %s", exc)
         for obj in (self.listener, self.gantry, self.leds, self.lcd, self.speaker):
             try:
                 obj.close()
@@ -97,14 +180,15 @@ class VoiceChessGame:
     # ------------------------------------------------------------------
 
     def _on_listening(self, active: bool, context: str = "") -> None:
+        led_side = self._active_side_led
         if active:
-            self.leds.set(PLAYER, "blue")
+            self.leds.set(led_side, "blue")
             if context == "command":
                 self.lcd.show(
                     "=== VOICE CHESS ===",
                     "LISTENING...",
-                    "SPEAK YOUR MOVE",
-                    "ex: Move E2 to E4",
+                    "SPEAK YOUR COMMAND",
+                    "MOVE / VALIDATE",
                 )
             elif context == "confirmation":
                 if self._last_confirm_lines:
@@ -113,10 +197,10 @@ class VoiceChessGame:
                     self.lcd.show(c0, c1, "SAY: YES OR NO", "LISTENING: YES/NO")
                 else:
                     self.lcd.show("CONFIRM?", "SAY: YES OR NO", "LISTENING: YES/NO", "")
-        elif self.leds.state(PLAYER) == "blue":
-            self.leds.off(PLAYER)
+        elif self.leds.state(led_side) == "blue":
+            self.leds.off(led_side)
 
-    def _command_not_recognized(self) -> None:
+    def _command_not_recognized(self, side: str = PLAYER) -> None:
         """Chamado quando escuta a wake word mas nao reconhece o comando."""
         self.lcd.show(
             "NOT RECOGNIZED",
@@ -124,9 +208,9 @@ class VoiceChessGame:
             "SAY: MAGNUS",
             "THEN YOUR COMMAND",
         )
-        self.leds.set(PLAYER, "red")
+        self.leds.set(side, "red")
         self.speaker.say("Command not recognized. Please try again.", wait=True)
-        self.leds.off(PLAYER)
+        self.leds.off(side)
 
     def _on_confirm(self, command) -> None:
         """Speaker repete o comando e o LCD o mostra, enquanto espera SIM/NAO."""
@@ -141,10 +225,22 @@ class VoiceChessGame:
             lines = ("START NEW GAME?", "=== VOICE CHESS ===", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "RESIGN_GAME":
             speech = "resign game. Say yes or no."
-            lines = ("RESIGN GAME?", "BLACK WINS", "SAY: YES OR NO", "")
+            lines = ("RESIGN GAME?", "END CURRENT GAME", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "ORGANIZE_BOARD":
             speech = "organize board. Say yes or no."
             lines = ("ORGANIZE BOARD?", "RESET ALL PIECES", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "MODE_PVE":
+            speech = "Player versus computer mode. Say yes or no."
+            lines = ("CONFIRM MODE?", "MODE: PVE (CPU)", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "MODE_PVP":
+            speech = "Player versus player mode. Say yes or no."
+            lines = ("CONFIRM MODE?", "MODE: PVP (2P)", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "MODE_MANUAL":
+            speech = "Manual mode with camera validation. Say yes or no."
+            lines = ("CONFIRM CONTROL?", "MANUAL + CAMERA", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "MODE_VOICE":
+            speech = "Voice and gantry mode. Say yes or no."
+            lines = ("CONFIRM CONTROL?", "VOICE + GANTRY", "SAY: YES OR NO", "")
         else:
             speech = f"{command}. Say yes or no."
             lines = ("CONFIRM?", f"{command}", "SAY: YES OR NO", "")
@@ -157,7 +253,9 @@ class VoiceChessGame:
     # ------------------------------------------------------------------
 
     def _idle(self) -> None:
+        self._active_side_led = PLAYER
         self.leds.off()
+        save_logical_board_snapshot(self.planner.board, status_text="IDLE - Aguardando início")
         if self._first_run:
             self.lcd.show(
                 "=== VOICE CHESS ===",
@@ -228,20 +326,36 @@ class VoiceChessGame:
                 )
 
     def _configure(self) -> bool:
-        """Escolhe a dificuldade por voz. Pode dizer o nível ou apenas iniciar com o padrão."""
+        """
+        Configura modo de jogo (PvE ou PvP) e dificuldade.
+        Sincroniza com ``vision/game_settings.json`` (configuravel via Web UI)
+        e tambem aceita comandos de voz (MAGNUS PVP, MAGNUS PVE, MAGNUS LEVEL 1-8, MAGNUS START).
+        """
+        self._sync_settings_from_disk()
+        mode_tag = "PVP" if self.game_mode == "pvp" else f"PVE L{self.level}"
         self.lcd.show(
-            "CHOOSE LEVEL",
-            f"DEFAULT: LEVEL {self.level}",
+            f"MODE: {mode_tag}",
             "SAY: MAGNUS LEVEL 1-8",
+            "MAGNUS PVP / PVE",
             "OR MAGNUS START",
         )
-        self.speaker.say(f"New game. Default difficulty is level {self.level}. "
-                         f"Say Magnus level, or say Magnus start.")
+        if self.game_mode == "pvp":
+            self.speaker.say(
+                f"New game. Current mode is Player versus Player "
+                f"(White: {self.white_control}, Black: {self.black_control}). "
+                f"Say Magnus start, or choose mode."
+            )
+        else:
+            self.speaker.say(
+                f"New game. Default difficulty is level {self.level}. "
+                f"Say Magnus level, Magnus P V P, or say Magnus start."
+            )
+
         while True:
             result = self.listener.listen()
             if result.command and not result.confirmed:
                 self.lcd.show(
-                    "CHOOSE LEVEL",
+                    "CHOOSE MODE/LEVEL",
                     "CANCELLED",
                     "SAY: MAGNUS LEVEL",
                     "OR MAGNUS START",
@@ -251,7 +365,7 @@ class VoiceChessGame:
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
                 self.lcd.show(
-                    "CHOOSE LEVEL",
+                    f"MODE: {mode_tag}",
                     f"DEFAULT: LEVEL {self.level}",
                     "SAY: MAGNUS LEVEL 1-8",
                     "OR MAGNUS START",
@@ -259,19 +373,80 @@ class VoiceChessGame:
                 continue
             if not result.confirmed:
                 continue
+
             cmd = result.command
             if isinstance(cmd, LevelCommand):
+                self.game_mode = "pve"
                 self.level = cmd.level
-                self.lcd.show("LEVEL SELECTED", f"LEVEL {self.level}", "STARTING...", "")
+                self.black_control = "computer"
+                self._persist_settings()
+                self.lcd.show("LEVEL SELECTED", f"PVE - LEVEL {self.level}", "STARTING...", "")
                 self.speaker.say(f"Level {self.level} selected.")
                 return True
-            if isinstance(cmd, ActionCommand) and cmd.action == "NEW_GAME":
-                self.lcd.show("LEVEL SELECTED", f"LEVEL {self.level}", "STARTING...", "")
-                self.speaker.say(f"Starting with level {self.level}.")
-                return True
-            if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
-                return False
-            self.speaker.say("Please choose a level from one to eight, or say start.")
+
+            if isinstance(cmd, ActionCommand):
+                if cmd.action == "MODE_PVE":
+                    self.game_mode = "pve"
+                    self.black_control = "computer"
+                    self._persist_settings()
+                    self.lcd.show("MODE: PVE", f"LEVEL {self.level}", "SAY LEVEL 1-8", "OR MAGNUS START")
+                    self.speaker.say(f"Player versus computer selected. Say level one to eight, or say Magnus start.")
+                    continue
+
+                if cmd.action == "MODE_PVP":
+                    self.game_mode = "pvp"
+                    if self.black_control == "computer":
+                        self.black_control = "manual"
+                    self._persist_settings()
+                    self.lcd.show(
+                        "MODE: PVP",
+                        f"W:{self.white_control.upper()} B:{self.black_control.upper()}",
+                        "SAY: MANUAL / VOICE",
+                        "OR MAGNUS START",
+                    )
+                    self.speaker.say(
+                        f"Player versus player selected. White is {self.white_control}, "
+                        f"Black is {self.black_control}. Say Magnus manual, Magnus voice, or Magnus start."
+                    )
+                    continue
+
+                if cmd.action == "MODE_MANUAL":
+                    self.white_control = "manual"
+                    if self.game_mode == "pvp":
+                        self.black_control = "manual"
+                    self._persist_settings()
+                    self.lcd.show("MANUAL MODE SET", "USE MAGNUS VALIDATE", "SAY: MAGNUS START", "")
+                    self.speaker.say("Manual mode enabled. Say Magnus start to begin.")
+                    continue
+
+                if cmd.action == "MODE_VOICE":
+                    self.white_control = "voice"
+                    if self.game_mode == "pvp":
+                        self.black_control = "voice"
+                    self._persist_settings()
+                    self.lcd.show("VOICE MODE SET", "GANTRY ENABLED", "SAY: MAGNUS START", "")
+                    self.speaker.say("Voice and gantry mode enabled. Say Magnus start to begin.")
+                    continue
+
+                if cmd.action == "NEW_GAME":
+                    self._sync_settings_from_disk()
+                    if self.game_mode == "pvp":
+                        self.lcd.show(
+                            "STARTING PVP",
+                            f"W:{self.white_control.upper()}",
+                            f"B:{self.black_control.upper()}",
+                            "STARTING...",
+                        )
+                        self.speaker.say("Starting Player versus Player game.")
+                    else:
+                        self.lcd.show("LEVEL SELECTED", f"LEVEL {self.level}", "STARTING...", "")
+                        self.speaker.say(f"Starting with level {self.level}.")
+                    return True
+
+                if cmd.action == "RESIGN_GAME":
+                    return False
+
+            self.speaker.say("Please choose a level from one to eight, P V P, or say start.")
 
     def _connect_gantry(self) -> None:
         try:
@@ -314,29 +489,58 @@ class VoiceChessGame:
 
     def _play(self) -> None:
         self.planner.reset()
-        self._start_engine()
-        self.lcd.show("GAME STARTED", "YOU: WHITE")
-        self.speaker.say("Game started. You play white.")
+        if self.game_mode == "pve" or self._control_for(chess.BLACK) == "computer":
+            self._start_engine()
+
+        if self.game_mode == "pvp":
+            self.lcd.show(
+                "PVP GAME STARTED",
+                f"WHITE: {self.white_control.upper()}",
+                f"BLACK: {self.black_control.upper()}",
+                "WHITE TO MOVE",
+            )
+            self.speaker.say("Player versus Player game started. White moves first.")
+        else:
+            self.lcd.show("GAME STARTED", "YOU: WHITE")
+            self.speaker.say("Game started. You play white.")
+
+        save_logical_board_snapshot(self.planner.board, status_text=f"Em jogo ({self.game_mode.upper()})")
 
         board = self.planner.board
         while not board.is_game_over():
-            if board.turn == PLAYER_COLOR:
-                move = self._player_move()
-                if move is None:                               # desistiu
-                    self._has_completed_game = True
-                    self.lcd.show("YOU RESIGNED", "BLACK WINS")
-                    self.speaker.say("You resigned. Black wins.", wait=False)
-                    self.leds.celebrate(COMPUTER, PLAYER, seconds=5.0)
-                    self.speaker.wait_idle()
+            turn_color = board.turn
+            side_led = self._side_led(turn_color)
+            self._active_side_led = side_led
+            control = self._control_for(turn_color)
+
+            if control == "computer":
+                move = self._computer_move()
+                self._execute(move, COMPUTER)
+            elif control == "manual":
+                ok = self._manual_player_turn(turn_color)
+                if not ok:                                     # desistiu
+                    self._handle_resignation(turn_color)
                     return
-                self._execute(move, PLAYER)
             else:
-                self._execute(self._computer_move(), COMPUTER)
+                move = self._player_move(turn_color)
+                if move is None:                               # desistiu
+                    self._handle_resignation(turn_color)
+                    return
+                # Se _player_move ja aplicou via MAGNUS VALIDATE, move vem com flag _already_applied
+                if not getattr(move, "_already_applied", False):
+                    self._execute(move, side_led)
+
             board = self.planner.board
+            save_logical_board_snapshot(
+                board,
+                last_move_uci=board.peek().uci().upper() if board.move_stack else None,
+                status_text=f"Turno: {'Brancas' if board.turn == chess.WHITE else 'Pretas'}",
+            )
 
         self._has_completed_game = True
         speech, lines = phrases.game_result(board)
         self.lcd.show(*lines)
+        save_logical_board_snapshot(board, status_text=f"Fim de jogo: {lines[0]}")
         if board.is_checkmate():
             winner_color = chess.BLACK if board.turn == chess.WHITE else chess.WHITE
             winner_side = PLAYER if winner_color == PLAYER_COLOR else COMPUTER
@@ -350,20 +554,116 @@ class VoiceChessGame:
             self.leds.blink_both("yellow", seconds=5.0)
             self.speaker.wait_idle()
 
-    def _player_move(self) -> chess.Move | None:
-        """Espera MAGNUS MOVE [FROM] [TO] confirmado. None = jogador desistiu."""
+    def _handle_resignation(self, resigning_color: bool) -> None:
+        self._has_completed_game = True
+        if resigning_color == chess.WHITE:
+            self.lcd.show("YOU RESIGNED" if self.game_mode == "pve" else "WHITE RESIGNED", "BLACK WINS")
+            msg = "You resigned. Black wins." if self.game_mode == "pve" else "White resigned. Black wins."
+            winner_side, loser_side = COMPUTER, PLAYER
+        else:
+            self.lcd.show("BLACK RESIGNED", "WHITE WINS")
+            msg = "Black resigned. White wins."
+            winner_side, loser_side = PLAYER, COMPUTER
+        self.speaker.say(msg, wait=False)
+        self.leds.celebrate(winner_side, loser_side, seconds=5.0)
+        self.speaker.wait_idle()
+
+    def _manual_player_turn(self, turn_color: bool) -> bool:
+        """
+        Turno de um jogador em modo MANUAL:
+        O jogador move a peca fisicamente no tabuleiro e diz ``MAGNUS VALIDATE``.
+        Retorna True quando um lance valido foi confirmado e aplicado, ou False se desistiu.
+        """
+        side_led = self._side_led(turn_color)
+        color_name = "WHITE" if turn_color == chess.WHITE else "BLACK"
         while True:
             self.lcd.show(
-                "YOUR TURN (WHITE)",
+                f"{color_name} (MANUAL)",
+                "MOVE PIECE ON BOARD",
+                "THEN SAY: MAGNUS",
+                "VALIDATE",
+            )
+            result = self.listener.listen()
+            if result.command and not result.confirmed:
+                self.lcd.show(
+                    "CANCELLED",
+                    f"{color_name} (MANUAL)",
+                    "SAY: MAGNUS",
+                    "VALIDATE",
+                )
+                self.speaker.say("Cancelled.", wait=False)
+                time.sleep(1.0)
+                continue
+            if result.wake_detected and not result.command:
+                self._command_not_recognized(side=side_led)
+                continue
+            if not result.confirmed:
+                continue
+
+            cmd = result.command
+            if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
+                return False
+
+            if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
+                if self.camera is None or not self.camera.is_ready:
+                    self.lcd.show("CAMERA OFFLINE", "USE VOICE MOVE", "SAY: MAGNUS MOVE", "EX: E2 TO E4")
+                    self.speaker.say("Camera is offline. Please announce your move by voice.", wait=True)
+                    continue
+
+                self.lcd.show("VALIDATING MOVE", "CAMERA CAPTURING...", "PLEASE WAIT", "")
+                val = self.camera.validate_manual_turn(
+                    self.planner.board,
+                    is_phys_valid_fn=self.planner.is_phys_valid,
+                )
+                if val.valid and val.move is not None:
+                    self.leds.set(side_led, "green")
+                    self.lcd.show(*val.lcd_lines)
+                    self.speaker.say(val.speech, wait=True)
+                    self.planner.apply_manual_move(val.move)
+                    self.leds.off(side_led)
+                    self._check_alert_after_move()
+                    return True
+                else:
+                    self.lcd.show(*val.lcd_lines)
+                    self.speaker.say(val.speech, wait=False)
+                    self.leds.blink(side_led, "red", cfg.BLINK_ERROR_SECONDS)
+                    self.speaker.wait_idle()
+                    continue
+
+            # Tambem aceita se o jogador decidir falar o lance (MAGNUS MOVE E2 E4)
+            if isinstance(cmd, MoveCommand):
+                move = self._resolve_move(cmd)
+                if move is None:
+                    self._invalid_move(side=side_led)
+                    continue
+                if self._gantry_connected:
+                    self._execute(move, side_led)
+                else:
+                    speech, lines = phrases.announce(self.planner.board, move)
+                    self.lcd.show(*lines)
+                    self.speaker.say(speech, wait=True)
+                    self.planner.apply_manual_move(move)
+                    self._check_alert_after_move()
+                return True
+
+            self._command_not_recognized(side=side_led)
+
+    def _player_move(self, turn_color: bool = chess.WHITE) -> chess.Move | None:
+        """Espera MAGNUS MOVE [FROM] [TO] confirmado (ou MAGNUS VALIDATE). None = jogador desistiu."""
+        side_led = self._side_led(turn_color)
+        color_name = "WHITE" if turn_color == chess.WHITE else "BLACK"
+        while True:
+            self.lcd.show(
+                f"YOUR TURN ({color_name})",
                 "SAY: MAGNUS",
                 "THEN YOUR MOVE",
-                "(ex: Move E2 to E4)"
+                "(ex: Move E2 to E4)",
             )
             result = self.listener.listen()
             if result.command and not result.confirmed:
                 self.lcd.show(
                     "MOVE CANCELLED",
-                    "YOUR TURN (WHITE)",
+                    f"YOUR TURN ({color_name})",
                     "SAY: MAGNUS MOVE",
                     "TRY AGAIN",
                 )
@@ -371,19 +671,40 @@ class VoiceChessGame:
                 time.sleep(1.5)
                 continue
             if result.wake_detected and not result.command:
-                self._command_not_recognized()
+                self._command_not_recognized(side=side_led)
                 continue
             if not result.confirmed:
                 continue
             cmd = result.command
             if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
                 return None
+            if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE" and self.camera is not None and self.camera.is_ready:
+                self.lcd.show("VALIDATING MOVE", "CAMERA CAPTURING...", "PLEASE WAIT", "")
+                val = self.camera.validate_manual_turn(
+                    self.planner.board,
+                    is_phys_valid_fn=self.planner.is_phys_valid,
+                )
+                if val.valid and val.move is not None:
+                    self.leds.set(side_led, "green")
+                    self.lcd.show(*val.lcd_lines)
+                    self.speaker.say(val.speech, wait=True)
+                    self.planner.apply_manual_move(val.move)
+                    self.leds.off(side_led)
+                    self._check_alert_after_move()
+                    setattr(val.move, "_already_applied", True)
+                    return val.move
+                else:
+                    self.lcd.show(*val.lcd_lines)
+                    self.speaker.say(val.speech, wait=False)
+                    self.leds.blink(side_led, "red", cfg.BLINK_ERROR_SECONDS)
+                    self.speaker.wait_idle()
+                    continue
             if not isinstance(cmd, MoveCommand):
-                self._command_not_recognized()
+                self._command_not_recognized(side=side_led)
                 continue
             move = self._resolve_move(cmd)
             if move is None:
-                self._invalid_move()
+                self._invalid_move(side=side_led)
                 continue
             return move
 
@@ -405,15 +726,15 @@ class VoiceChessGame:
                 return move
         return None
 
-    def _invalid_move(self) -> None:
+    def _invalid_move(self, side: str = PLAYER) -> None:
         self.lcd.show(
             "INVALID MOVE!",
             "NOT LEGAL ON BOARD",
             "TRY AGAIN",
-            "SAY: MAGNUS MOVE"
+            "SAY: MAGNUS MOVE",
         )
         self.speaker.say("Invalid move.", wait=False)
-        self.leds.blink(PLAYER, "red", cfg.BLINK_ERROR_SECONDS)
+        self.leds.blink(side, "red", cfg.BLINK_ERROR_SECONDS)
         self.speaker.wait_idle()
 
     def _computer_move(self) -> chess.Move:
@@ -426,7 +747,10 @@ class VoiceChessGame:
         return pv[0] if pv else legal[0]
 
     def _execute(self, move: chess.Move, side: str) -> None:
-        """Anuncia o lance, envia os passos ao ESP32 e espera a conclusao."""
+        """
+        Anuncia o lance, envia os passos ao ESP32, espera a conclusao e
+        (quando a camera estiver ativa) captura uma foto para verificar a posicao.
+        """
         speech, lines = phrases.announce(self.planner.board, move)
         self.lcd.show(*lines)
         self.speaker.say(speech, wait=False)
@@ -445,8 +769,28 @@ class VoiceChessGame:
             raise GameAbort(f"Gantry: {exc}") from exc
         self.leds.off(side)
 
-        # Cheque: se o movimento gerou uma posicao de cheque (e a partida nao acabou),
-        # o speaker fala "Check!" e o LED do lado em cheque fica amarelo por 1,5 segundos.
+        # Verificacao visual pos-movimento do Gantry (Modo PvE e lances Gantry em PvP)
+        if self.camera is not None and self.camera.is_ready and self.verify_gantry_moves:
+            self.lcd.show("CAMERA CHECKING", "BOARD POSITION...", "PLEASE WAIT", "")
+            ver = self.camera.verify_gantry_position(self.planner.board, last_move=move)
+            if ver.success:
+                self.lcd.show(*ver.lcd_lines)
+                log.info("[Vision] %s", ver.message)
+            else:
+                log.warning("[Vision] %s", ver.message)
+                self.lcd.show(*ver.lcd_lines)
+                if ver.speech:
+                    self.speaker.say(ver.speech, wait=False)
+                self.leds.blink(side, "yellow", 2.0)
+                self.speaker.wait_idle()
+
+        self._check_alert_after_move()
+
+    def _check_alert_after_move(self) -> None:
+        """
+        Cheque: se o movimento gerou uma posicao de cheque (e a partida nao acabou),
+        o speaker fala 'Check!' e o LED do lado em cheque fica amarelo por 1,5 segundos.
+        """
         board = self.planner.board
         if board.is_check() and not board.is_game_over():
             in_check_side = PLAYER if board.turn == PLAYER_COLOR else COMPUTER

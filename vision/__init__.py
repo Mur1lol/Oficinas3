@@ -20,11 +20,13 @@ Usage
 
 from __future__ import annotations
 
+import base64
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 
@@ -37,10 +39,24 @@ from .board_state    import BoardState
 from .state_comparator import StateComparator, CompareResult
 from .move_validator import MoveValidator, CameraState
 from .diag_manager   import DiagManager
+from .board_verifier import (
+    GameSettings,
+    ManualValidationResult,
+    PositionVerificationResult,
+    annotate_validation_image,
+    detect_and_validate_manual_move,
+    record_validation_event,
+    verify_board_position,
+)
 
 log = logging.getLogger(__name__)
 
-__all__ = ["CameraSystem"]
+__all__ = [
+    "CameraSystem",
+    "GameSettings",
+    "ManualValidationResult",
+    "PositionVerificationResult",
+]
 
 
 class CameraSystem:
@@ -98,8 +114,10 @@ class CameraSystem:
             if ref_img is not None:
                 log.info("[CameraSystem] Loaded empty-board reference from %s", ref_path)
 
+        settings = GameSettings.load()
         self._detector = PieceDetector(
             reference_image=ref_img,
+            occupied_diff_threshold=settings.diff_threshold,
             board_orientation=orientation,
         )
 
@@ -114,6 +132,7 @@ class CameraSystem:
         )
 
         self._reference_state: Optional[BoardState] = None
+        self._last_warped: Optional[ object ] = None
         self._initialised = False
 
     # ------------------------------------------------------------------
@@ -168,6 +187,26 @@ class CameraSystem:
     # Public operations
     # ------------------------------------------------------------------
 
+    def _reload_runtime_calibration_and_settings(self) -> None:
+        """Reload calibration & threshold if updated via the Web UI."""
+        settings = GameSettings.load()
+        self._detector._diff_thresh = settings.diff_threshold
+        cal_path = Path(cfg.CALIBRATION_FILE)
+        if cal_path.is_file():
+            try:
+                cal = CalibrationData.load(cal_path)
+                if cal.is_valid():
+                    self._calibrator.update(cal)
+                    self._segmenter = BoardSegmenter(board_orientation=cal.board_orientation)
+                    self._detector._orientation = cal.board_orientation
+            except Exception:
+                pass
+        ref_path = Path(getattr(cfg, "REFERENCE_EMPTY_FILE", cfg.VISION_DIR / "reference_empty.png"))
+        if ref_path.is_file() and self._detector._ref is None:
+            ref_img = cv2.imread(str(ref_path))
+            if ref_img is not None:
+                self._detector.set_reference(ref_img, orientation=self._detector._orientation)
+
     def capture_board_state(self) -> Optional[BoardState]:
         """
         Capture and return the current board state.
@@ -177,7 +216,113 @@ class CameraSystem:
         if not self._initialised:
             log.warning("[CameraSystem] Not initialised. Call initialize() first.")
             return None
+        self._reload_runtime_calibration_and_settings()
         return self._validator.capture_state("board_state")
+
+    def _capture_warped_and_state(self, label: str = "capture") -> tuple[Optional[object], Optional[BoardState]]:
+        """Capture a single corrected frame and its processed BoardState."""
+        self._reload_runtime_calibration_and_settings()
+        frame = self._camera.capture_with_retry(max_attempts=cfg.MAX_CAPTURE_ATTEMPTS)
+        if frame is None:
+            return None, None
+        warped = self._calibrator.correct_perspective(frame)
+        self._diag.save(warped, f"{label}_corrected")
+        state = self._validator._process_board(warped)
+        self._reference_state = state
+        return warped, state
+
+    def verify_gantry_position(
+        self,
+        board,
+        last_move=None,
+        settle_seconds: float = cfg.POST_MOVE_SETTLE_SECONDS,
+    ) -> PositionVerificationResult:
+        """
+        Capture a photo after the Gantry finishes a move and verify that all
+        pieces are in their expected positions according to ``board``.
+        """
+        if not self._initialised:
+            return PositionVerificationResult(
+                success=False,
+                message="CameraSystem não inicializado.",
+                speech="",
+                lcd_lines=("CAMERA OFFLINE", "SKIP VERIFICATION", "", ""),
+            )
+        if settle_seconds > 0:
+            time.sleep(settle_seconds)
+
+        warped, state = self._capture_warped_and_state("post_gantry")
+        if state is None or warped is None:
+            res = PositionVerificationResult(
+                success=False,
+                move_uci=last_move.uci().upper() if last_move else None,
+                message="Falha ao capturar imagem da câmera após movimento do Gantry.",
+                speech="Camera capture failed.",
+                lcd_lines=("CAMERA ERROR", "CAPTURE FAILED", "", ""),
+            )
+            record_validation_event(res.to_dict())
+            return res
+
+        res = verify_board_position(board, state, last_move=last_move)
+        orientation = self._calibrator.calibration.board_orientation
+        annotated = annotate_validation_image(warped, state, orientation=orientation, verify_result=res)
+        self._diag.save(annotated, "post_gantry_verified")
+
+        thumb_b64 = None
+        ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        if ok:
+            thumb_b64 = base64.b64encode(buf).decode("utf-8")
+
+        event = res.to_dict()
+        event["annotated_image"] = thumb_b64
+        record_validation_event(event)
+        return res
+
+    def validate_manual_turn(
+        self,
+        board,
+        is_phys_valid_fn: Optional[Callable] = None,
+    ) -> ManualValidationResult:
+        """
+        Triggered when a manual player says 'MAGNUS VALIDATE'.
+        Captures a photo, infers the move played on the physical board,
+        checks chess legality against ``board``, and returns the validation result.
+        """
+        if not self._initialised:
+            return ManualValidationResult(
+                valid=False,
+                error_code="CAMERA_NOT_INITIALISED",
+                message="Câmera não inicializada.",
+                speech="Camera is not available to validate the move.",
+                lcd_lines=("CAMERA OFFLINE", "CANNOT VALIDATE", "", ""),
+            )
+
+        warped, state = self._capture_warped_and_state("manual_validate")
+        if state is None or warped is None:
+            res = ManualValidationResult(
+                valid=False,
+                error_code="CAPTURE_FAILED",
+                message="Falha ao capturar imagem da câmera.",
+                speech="Could not capture camera image. Please try again.",
+                lcd_lines=("CAMERA ERROR", "CAPTURE FAILED", "SAY: MAGNUS", "VALIDATE"),
+            )
+            record_validation_event(res.to_dict())
+            return res
+
+        res = detect_and_validate_manual_move(board, state, is_phys_valid_fn=is_phys_valid_fn)
+        orientation = self._calibrator.calibration.board_orientation
+        annotated = annotate_validation_image(warped, state, orientation=orientation, manual_result=res)
+        self._diag.save(annotated, "manual_validate_annotated")
+
+        thumb_b64 = None
+        ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        if ok:
+            thumb_b64 = base64.b64encode(buf).decode("utf-8")
+
+        event = res.to_dict()
+        event["annotated_image"] = thumb_b64
+        record_validation_event(event)
+        return res
 
     def validate_move(
         self,

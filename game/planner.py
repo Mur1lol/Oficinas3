@@ -133,6 +133,53 @@ class MovePlanner:
         self._snapshot = None
         self._rebuild()
 
+    def apply_manual_move(self, move: chess.Move) -> None:
+        """
+        Aplica um lance feito manualmente pelo jogador (validado pela camera)
+        ao estado logico do tabuleiro e do cemiterio, sem mover o Gantry.
+        """
+        if move not in self.board.legal_moves:
+            raise PlanningError(f"Lance manual ilegal: {move}")
+        self._snapshot = (self.board.copy(), dict(self.cem_occ), self.robot_phys, self.carrying)
+        cb = self.board
+        color = cb.turn
+        opp = chess.BLACK if color == chess.WHITE else chess.WHITE
+        to_piece = cb.piece_at(move.to_square)
+
+        if move.promotion is not None:
+            if cb.is_capture(move):
+                cap_type = to_piece.piece_type if to_piece else chess.PAWN
+                try:
+                    slot = self.cem_slot_for(cap_type, opp)
+                    self.cem_occ[slot] = cap_type
+                except PlanningError:
+                    pass
+            try:
+                pawn_slot = self.cem_slot_for(chess.PAWN, color)
+                self.cem_occ[pawn_slot] = chess.PAWN
+            except PlanningError:
+                pass
+            res_slot = self.promotable_slot(move.promotion, color)
+            if res_slot is not None and res_slot in self.cem_occ:
+                del self.cem_occ[res_slot]
+        elif cb.is_en_passant(move):
+            try:
+                slot = self.cem_slot_for(chess.PAWN, opp)
+                self.cem_occ[slot] = chess.PAWN
+            except PlanningError:
+                pass
+        elif cb.is_capture(move):
+            cap_type = to_piece.piece_type if to_piece else chess.PAWN
+            try:
+                slot = self.cem_slot_for(cap_type, opp)
+                self.cem_occ[slot] = cap_type
+            except PlanningError:
+                pass
+
+        self.board.push(move)
+        self.carrying = False
+        self._rebuild()
+
     # ── coordenadas ──────────────────────────────────────────────────────────
 
     @staticmethod

@@ -1,0 +1,10 @@
+{
+  "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+  "turn": "white",
+  "fullmove_number": 1,
+  "is_check": false,
+  "is_game_over": false,
+  "last_move_uci": null,
+  "status_text": "Reset via Web UI",
+  "updated_at": "00:54:03"
+}
