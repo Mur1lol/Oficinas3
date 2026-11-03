@@ -21,8 +21,8 @@ def validate(command: Command | None, reason: str | None = None) -> dict:
     if isinstance(command, ActionCommand) and command.action in ACTIONS:
         return {**result, "command": command.action}
     if isinstance(command, LevelCommand):
-        if not 1 <= command.level <= 8:
-            return {"valid": False, "reason": "Difficulty level must be between 1 and 8."}
+        if not 1 <= command.level <= 10:
+            return {"valid": False, "reason": "Difficulty level must be between 1 and 10."}
         return {**result, "command": "SET_DIFFICULTY", "level": command.level}
     if isinstance(command, MoveCommand):
         source, destination = command.from_square.strip().upper(), command.to_square.strip().upper()

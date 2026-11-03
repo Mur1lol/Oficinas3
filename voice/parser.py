@@ -22,7 +22,7 @@ class ActionCommand:
 
 @dataclass(frozen=True)
 class LevelCommand:
-    """Difficulty selection (1-8), e.g. "level four"."""
+    """Difficulty selection (1-10), e.g. "level three" or "level 10"."""
 
     level: int
 
@@ -33,6 +33,12 @@ class LevelCommand:
 Command = MoveCommand | ActionCommand | LevelCommand
 
 DIGITS = dict(zip("one two three four five six seven eight".split(), "12345678", strict=True))
+LEVEL_DIGITS = {
+    **DIGITS,
+    "nine": "9",
+    "ten": "10",
+}
+VALID_LEVEL_STRS = {str(i) for i in range(1, 11)}
 
 # English letters and NATO phonetic alphabet
 COLUMNS = {
@@ -104,16 +110,22 @@ ACTIONS = {
     "MODE_PVE": (
         "pve",
         "p v e",
+        "player versus engine",
+        "player vs engine",
+        "versus engine",
         "player versus computer",
         "player versus machine",
         "against computer",
+        " against engine",
         "single player",
+        "engine",
         "machine",
     ),
     "MODE_PVP": (
         "pvp",
         "p v p",
         "player versus player",
+        "player vs player",
         "two players",
         "versus player",
         "multiplayer",
@@ -129,10 +141,35 @@ ACTIONS = {
         "automatic",
         "gantry mode",
     ),
+    "COLOR_WHITE": (
+        "white",
+        "play white",
+        "white pieces",
+        "color white",
+    ),
+    "COLOR_BLACK": (
+        "black",
+        "play black",
+        "black pieces",
+        "color black",
+    ),
 }
 
-# Actions that execute immediately after "MAGNUS <ACTION>" without requiring YES/NO confirmation
-IMMEDIATE_ACTIONS = {"VALIDATE_MOVE"}
+# Comandos que executam imediatamente apos "MAGNUS <COMANDO>" sem exigir confirmacao YES/NO.
+# Caso mude de ideia e queira exigir confirmacao (YES/NO) nos comandos de menu,
+# basta deixar apenas {"VALIDATE_MOVE"} abaixo e mudar IMMEDIATE_LEVEL para False:
+# IMMEDIATE_ACTIONS = {"VALIDATE_MOVE"}
+IMMEDIATE_ACTIONS = {
+    "VALIDATE_MOVE",
+    "NEW_GAME",
+    "MODE_PVP",
+    "MODE_PVE",
+    "MODE_MANUAL",
+    "MODE_VOICE",
+    "COLOR_WHITE",
+    "COLOR_BLACK",
+}
+IMMEDIATE_LEVEL = True
 
 MOVE_WORDS = {"move", "play"}
 LEVEL_WORDS = {"level", "difficulty"}
@@ -164,10 +201,10 @@ def parse(text: str, language: str | None = None) -> tuple[Command | None, str |
             return ActionCommand(action), None
     tokens = text.split()
     if tokens[0] in LEVEL_WORDS:
-        rest = [DIGITS.get(t, t) for t in tokens[1:] if t not in FILLERS]
-        if len(rest) == 1 and rest[0] in set("12345678"):
+        rest = [LEVEL_DIGITS.get(t, t) for t in tokens[1:] if t not in FILLERS]
+        if len(rest) == 1 and rest[0] in VALID_LEVEL_STRS:
             return LevelCommand(int(rest[0])), None
-        return None, "Expected a difficulty level from 1 to 8."
+        return None, "Expected a difficulty level from 1 to 10."
     if tokens[0] not in MOVE_WORDS:
         return None, "No recognised command keyword."
     tokens = [DIGITS.get(t, COLUMNS.get(t, t)) for t in tokens[1:] if t not in FILLERS]
@@ -199,6 +236,14 @@ def grammar(stage: str, language: str = "en-US") -> list[str]:
         return ["magnus", "[unk]"]
     if stage == "confirmation":
         return sorted(YES | NO | {"[unk]"})
-    words = MOVE_WORDS | LEVEL_WORDS | FILLERS | set(DIGITS) | set(COLUMNS) | set("abcdefgh")
+    words = (
+        MOVE_WORDS
+        | LEVEL_WORDS
+        | FILLERS
+        | set(LEVEL_DIGITS)
+        | VALID_LEVEL_STRS
+        | set(COLUMNS)
+        | set("abcdefgh")
+    )
     words |= {word for phrases in ACTIONS.values() for phrase in phrases for word in phrase.split()}
     return sorted(words | {"[unk]"})

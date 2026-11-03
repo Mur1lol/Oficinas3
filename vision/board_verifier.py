@@ -100,7 +100,7 @@ class GameSettings:
         MAD threshold for occupancy detection.
     """
     game_mode: str = "pve"
-    level: int = 4
+    level: int = 3
     white_control: str = "voice"
     black_control: str = "computer"
     verify_gantry_moves: bool = True
@@ -108,11 +108,15 @@ class GameSettings:
 
     def normalize(self) -> "GameSettings":
         self.game_mode = "pvp" if str(self.game_mode).lower() == "pvp" else "pve"
-        self.level = max(1, min(8, int(self.level or 4)))
+        self.level = max(1, min(10, int(self.level or 3)))
         if self.game_mode == "pve":
-            # In PvE, White is the human player (default voice/gantry, or manual) and Black is computer
-            self.white_control = "manual" if str(self.white_control).lower() == "manual" else "voice"
-            self.black_control = "computer"
+            # In PvE, one side is the human player ("voice" or "manual") and the other is "computer"
+            if str(self.white_control).lower() == "computer":
+                self.white_control = "computer"
+                self.black_control = "manual" if str(self.black_control).lower() == "manual" else "voice"
+            else:
+                self.white_control = "manual" if str(self.white_control).lower() == "manual" else "voice"
+                self.black_control = "computer"
         else:
             self.white_control = "manual" if str(self.white_control).lower() == "manual" else "voice"
             self.black_control = "manual" if str(self.black_control).lower() == "manual" else "voice"
@@ -125,7 +129,7 @@ class GameSettings:
         self.normalize()
         if color == chess.WHITE:
             return self.white_control
-        return "computer" if self.game_mode == "pve" else self.black_control
+        return self.black_control
 
     def to_dict(self) -> dict:
         self.normalize()

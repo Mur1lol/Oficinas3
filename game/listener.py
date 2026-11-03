@@ -5,8 +5,10 @@ Fonte de comandos do jogador, sempre no fluxo:
 
     MAGNUS (wake word) -> comando -> [speaker repete + LCD] -> SIM/NAO
 
-Comandos imediatos (ex.: ``MAGNUS VALIDATE``) sao emitidos direto apos o comando
-para acionar a camera sem pedir confirmacao extra.
+Comandos imediatos (ex.: ``MAGNUS START NEW GAME``, ``MAGNUS PVP``, ``MAGNUS PVE``,
+``MAGNUS LEVEL <1-10>``, ``MAGNUS WHITE``, ``MAGNUS BLACK``, ``MAGNUS VALIDATE``)
+sao emitidos direto apos o comando sem pedir confirmacao extra (deixado comentado
+caso queira reativar).
 
 Callbacks fornecidos pelo jogo:
     on_listening(bool) : True enquanto escuta o comando/confirmacao (LED AZUL)
@@ -22,7 +24,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from voice.parser import ActionCommand, IMMEDIATE_ACTIONS, normalize, parse, parse_confirmation
+from voice.parser import (
+    ActionCommand,
+    IMMEDIATE_ACTIONS,
+    IMMEDIATE_LEVEL,
+    LevelCommand,
+    normalize,
+    parse,
+    parse_confirmation,
+)
 from voice.validator import validate
 
 
@@ -97,8 +107,13 @@ class TextListener:
             self._on_listening(False, "")
             return ListenResult(command, reason=checked["reason"], wake_detected=True)
         self._on_listening(False, "")
-        if isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS:
+
+        # Comandos imediatos nao pedem confirmacao YES/NO (deixe comentado caso mude de ideia):
+        if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
+            isinstance(command, LevelCommand) and IMMEDIATE_LEVEL
+        ):
             return ListenResult(command, confirmed=True, wake_detected=True)
+
         self._on_confirm(command)
         self._on_listening(True, "confirmation")
         answer = input("[voz] confirma? (yes/no): ")

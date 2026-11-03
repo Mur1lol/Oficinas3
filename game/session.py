@@ -4,31 +4,23 @@ game/session.py
 Fluxo da partida do VoiceChess (PvE: Jogador x Maquina | PvP: Jogador x Jogador)
 com integracao do Gantry e do Sistema de Visao (CameraSystem).
 
-Modos de Jogo e Camera
-----------------------
-* **PvE (Jogador vs Maquina)**:
-  - O Gantry move as pecas no tabuleiro.
-  - Sempre que o Gantry termina um movimento, a camera captura uma foto
-    (``camera.verify_gantry_position``) para verificar se as pecas estao na
-    posicao correta.
-* **PvP (Jogador vs Jogador)**:
-  - Cada lado (Brancas / Pretas) pode jogar em modo **Voz/Gantry** (``"voice"``)
-    ou **Manual** (``"manual"``).
-  - No modo **Manual**, o jogador move a peca fisicamente na mao e diz
-    ``MAGNUS VALIDATE``; o sistema captura uma foto, valida se o lance e legal
-    ou invalido e, sendo valido, anuncia em voz alta qual foi o lance jogado.
-
-Regras de LED
-    - AZUL    : sempre que o usuario diz MAGNUS, enquanto escuta comando/confirmacao
-                (LED do lado do jogador).
-    - VERDE   : lance valido; no LED do lado de quem joga, ate o ESP32 responder "ok".
-    - VERMELHO: lance invalido; pisca 3 s no LED do lado do jogador.
-    - AMARELO :
-        - Cheque: LED do lado sob xeque acende por 1.5s enquanto o speaker fala "Check!".
-        - Empate/Afogamento: LEDs de ambos os lados piscam em amarelo durante o aviso.
-    - FIM DE JOGO COM VENCEDOR:
-        - Vencedor: pisca alternando varias cores (verde, azul, ciano, amarelo, magenta, branco - sem vermelho).
-        - Perdedor: pisca em vermelho.
+Fluxo de Menu e Inicio de Partida
+---------------------------------
+1. IDLE:
+   - Speaker: "Welcome to Voice Chess. To start a new game, just say the wake word
+     Magnus, followed by the words Start new game."
+   - LCD: inalterado ("=== VOICE CHESS ===", "SAY: MAGNUS", "START NEW GAME", "TO BEGIN PLAY").
+2. CONFIGURE:
+   - Seleciona o modo de jogo: "Select the game mode. Say Magnus P V P, or Magnus P V E."
+   - Se escolher PvE:
+     a) Seleciona dificuldade (1 a 10): "Select the difficulty level from 1 to 10. Say Magnus Level."
+     b) Seleciona cor das pecas: "Select the piece color. Say Magnus White, or Magnus Black."
+3. HOMING & VERIFICACAO INICIAL DA CAMERA:
+   - O Gantry executa o Homing.
+   - A camera captura uma foto do estado atual do tabuleiro.
+   - Se as pecas estiverem nas posicoes iniciais corretas, a partida inicia;
+     caso contrario, Speaker/LCD/LED avisam que as pecas nao estao nas posicoes
+     corretas e instruem a dizer "MAGNUS VALIDATE" quando estiverem prontas.
 """
 
 from __future__ import annotations
@@ -50,7 +42,7 @@ from .planner import MovePlanner, PlanningError
 log = logging.getLogger(__name__)
 
 PLAYER, COMPUTER = "player", "computer"      # lados / LEDs (player=painel Brancas, computer=painel Pretas)
-PLAYER_COLOR = chess.WHITE                   # painel "player" corresponde as Brancas
+PLAYER_COLOR = chess.WHITE                   # cor padrao do painel "player"
 
 
 class GameAbort(RuntimeError):
@@ -85,6 +77,7 @@ class VoiceChessGame:
             or (settings.black_control if self.game_mode == "pvp" else "computer")
         ).lower()
         self.verify_gantry_moves = settings.verify_gantry_moves
+        self.player_color = chess.BLACK if self.white_control == "computer" else chess.WHITE
 
         self._explicit_mode_overrides = (
             game_mode is not None or white_control is not None or black_control is not None
@@ -108,8 +101,6 @@ class VoiceChessGame:
         """Retorna 'voice', 'manual' ou 'computer' para o lado especificado."""
         if color == chess.WHITE:
             return self.white_control
-        if self.game_mode == "pve":
-            return "computer"
         return self.black_control
 
     def _sync_settings_from_disk(self) -> None:
@@ -128,7 +119,7 @@ class VoiceChessGame:
         s.game_mode = self.game_mode
         s.level = self.level
         s.white_control = self.white_control
-        s.black_control = "computer" if self.game_mode == "pve" else self.black_control
+        s.black_control = self.black_control
         s.verify_gantry_moves = self.verify_gantry_moves
         s.save()
 
@@ -143,8 +134,9 @@ class VoiceChessGame:
                 try:
                     if not self._configure():
                         continue
-                    if self._needs_gantry():
-                        self._connect_gantry()
+                    self._connect_gantry()
+                    if not self._verify_initial_board_setup():
+                        continue
                     self._play()
                 except GameAbort as exc:
                     self._show_abort(str(exc))
@@ -213,7 +205,11 @@ class VoiceChessGame:
         self.leds.off(side)
 
     def _on_confirm(self, command) -> None:
-        """Speaker repete o comando e o LCD o mostra, enquanto espera SIM/NAO."""
+        """
+        Speaker repete o comando e o LCD o mostra, enquanto espera SIM/NAO.
+        (Nota: os comandos de menu sao imediatos por padrao em parser.IMMEDIATE_ACTIONS,
+        mas as frases de confirmacao abaixo permanecem prontas caso queira reativar).
+        """
         if isinstance(command, MoveCommand):
             speech, lines = phrases.confirm_move(self.planner.board,
                                                  command.from_square, command.to_square)
@@ -230,17 +226,17 @@ class VoiceChessGame:
             speech = "organize board. Say yes or no."
             lines = ("ORGANIZE BOARD?", "RESET ALL PIECES", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "MODE_PVE":
-            speech = "Player versus computer mode. Say yes or no."
-            lines = ("CONFIRM MODE?", "MODE: PVE (CPU)", "SAY: YES OR NO", "")
+            speech = "Player versus engine mode. Say yes or no."
+            lines = ("CONFIRM MODE?", "MODE: PVE (ENGINE)", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "MODE_PVP":
             speech = "Player versus player mode. Say yes or no."
             lines = ("CONFIRM MODE?", "MODE: PVP (2P)", "SAY: YES OR NO", "")
-        elif isinstance(command, ActionCommand) and command.action == "MODE_MANUAL":
-            speech = "Manual mode with camera validation. Say yes or no."
-            lines = ("CONFIRM CONTROL?", "MANUAL + CAMERA", "SAY: YES OR NO", "")
-        elif isinstance(command, ActionCommand) and command.action == "MODE_VOICE":
-            speech = "Voice and gantry mode. Say yes or no."
-            lines = ("CONFIRM CONTROL?", "VOICE + GANTRY", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "COLOR_WHITE":
+            speech = "White pieces. Say yes or no."
+            lines = ("CONFIRM COLOR?", "COLOR: WHITE", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "COLOR_BLACK":
+            speech = "Black pieces. Say yes or no."
+            lines = ("CONFIRM COLOR?", "COLOR: BLACK", "SAY: YES OR NO", "")
         else:
             speech = f"{command}. Say yes or no."
             lines = ("CONFIRM?", f"{command}", "SAY: YES OR NO", "")
@@ -249,7 +245,7 @@ class VoiceChessGame:
         self.speaker.say(speech, wait=True)
 
     # ------------------------------------------------------------------
-    # Etapas
+    # Etapas de Menu (IDLE -> CONFIGURE -> HOMING -> VERIFY BOARD)
     # ------------------------------------------------------------------
 
     def _idle(self) -> None:
@@ -257,6 +253,7 @@ class VoiceChessGame:
         self.leds.off()
         save_logical_board_snapshot(self.planner.board, status_text="IDLE - Aguardando início")
         if self._first_run:
+            # LCD: **Nao alterar**
             self.lcd.show(
                 "=== VOICE CHESS ===",
                 "SAY: MAGNUS",
@@ -264,8 +261,8 @@ class VoiceChessGame:
                 "TO BEGIN PLAY",
             )
             self.speaker.say(
-                "Welcome to Voice Chess. You can start a new game by using the wake word Magnus, "
-                "followed by the command Start New Game.",
+                "Welcome to Voice Chess. To start a new game, just say the wake word Magnus, "
+                "followed by the words Start new game.",
                 wait=True,
             )
             self._first_run = False
@@ -308,6 +305,7 @@ class VoiceChessGame:
                     "OR ORGANIZE BOARD",
                 )
                 continue
+            # --- Caso reative a confirmacao (YES/NO) para o comando START NEW GAME: ---
             if result.command and not result.confirmed:
                 self.lcd.show(
                     "=== VOICE CHESS ===",
@@ -319,7 +317,7 @@ class VoiceChessGame:
             elif result.wake_detected and not result.command:
                 self._command_not_recognized()
                 self.lcd.show(
-                    "START NEW GAME?",
+                    "=== VOICE CHESS ===",
                     "SAY: MAGNUS",
                     "START NEW GAME",
                     "TO BEGIN PLAY",
@@ -327,126 +325,239 @@ class VoiceChessGame:
 
     def _configure(self) -> bool:
         """
-        Configura modo de jogo (PvE ou PvP) e dificuldade.
-        Sincroniza com ``vision/game_settings.json`` (configuravel via Web UI)
-        e tambem aceita comandos de voz (MAGNUS PVP, MAGNUS PVE, MAGNUS LEVEL 1-8, MAGNUS START).
+        Fluxo de configuracao do menu:
+        1. Seleciona modo de jogo (Magnus PvP ou Magnus PvE).
+        2. Se PvE:
+           - Seleciona nivel de dificuldade (1 a 10): "Magnus Level <1-10>"
+           - Seleciona cor das pecas: "Magnus White" ou "Magnus Black"
         """
         self._sync_settings_from_disk()
-        mode_tag = "PVP" if self.game_mode == "pvp" else f"PVE L{self.level}"
-        self.lcd.show(
-            f"MODE: {mode_tag}",
-            "SAY: MAGNUS LEVEL 1-8",
-            "MAGNUS PVP / PVE",
-            "OR MAGNUS START",
-        )
+
+        # ── Passo 1: Escolher Modo de Jogo (PvP ou PvE) ──────────────────────
+        mode = self._prompt_game_mode()
+        if mode is None:
+            return False
+
+        self.game_mode = mode
         if self.game_mode == "pvp":
-            self.speaker.say(
-                f"New game. Current mode is Player versus Player "
-                f"(White: {self.white_control}, Black: {self.black_control}). "
-                f"Say Magnus start, or choose mode."
-            )
+            if self.white_control == "computer":
+                self.white_control = "voice"
+            if self.black_control == "computer":
+                self.black_control = "manual"
+            self._persist_settings()
+            return True
+
+        # ── Passo 2 (PvE): Escolher Nivel de Dificuldade (1 a 10) ────────────
+        level = self._prompt_difficulty_level()
+        if level is None:
+            return False
+        self.level = level
+
+        # ── Passo 3 (PvE): Escolher Cor das Pecas (White ou Black) ───────────
+        color = self._prompt_piece_color()
+        if color is None:
+            return False
+
+        self.player_color = color
+        if color == chess.WHITE:
+            if self.white_control == "computer":
+                self.white_control = "voice"
+            self.black_control = "computer"
         else:
-            self.speaker.say(
-                f"New game. Default difficulty is level {self.level}. "
-                f"Say Magnus level, Magnus P V P, or say Magnus start."
-            )
+            self.white_control = "computer"
+            if self.black_control == "computer":
+                self.black_control = "voice"
+
+        self._persist_settings()
+        return True
+
+    def _prompt_game_mode(self) -> str | None:
+        """Pergunta ao jogador o modo de jogo: Magnus PvP ou Magnus PvE."""
+        mode_lcd = (
+            "SELECT GAME MODE",
+            "PvP:Player vs Player",
+            "PvE:Player vs Engine",
+            "Ex: Magnus PvE",
+        )
+        self.lcd.show(*mode_lcd)
+        self.speaker.say("Select the game mode. Say Magnus P V P, or Magnus P V E.", wait=True)
 
         while True:
             result = self.listener.listen()
-            if result.command and not result.confirmed:
-                self.lcd.show(
-                    "CHOOSE MODE/LEVEL",
-                    "CANCELLED",
-                    "SAY: MAGNUS LEVEL",
-                    "OR MAGNUS START",
-                )
-                self.speaker.say("Cancelled.", wait=True)
-                continue
+            # --- Caso reative confirmacao YES/NO no futuro: ---
+            # if result.command and not result.confirmed:
+            #     self.lcd.show(*mode_lcd)
+            #     self.speaker.say("Cancelled.", wait=True)
+            #     continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
-                self.lcd.show(
-                    f"MODE: {mode_tag}",
-                    f"DEFAULT: LEVEL {self.level}",
-                    "SAY: MAGNUS LEVEL 1-8",
-                    "OR MAGNUS START",
-                )
+                self.lcd.show(*mode_lcd)
                 continue
             if not result.confirmed:
                 continue
 
             cmd = result.command
-            if isinstance(cmd, LevelCommand):
-                self.game_mode = "pve"
-                self.level = cmd.level
-                self.black_control = "computer"
-                self._persist_settings()
-                self.lcd.show("LEVEL SELECTED", f"PVE - LEVEL {self.level}", "STARTING...", "")
-                self.speaker.say(f"Level {self.level} selected.")
+            if isinstance(cmd, ActionCommand):
+                if cmd.action == "MODE_PVP":
+                    return "pvp"
+                if cmd.action == "MODE_PVE":
+                    return "pve"
+                if cmd.action == "RESIGN_GAME":
+                    return None
+
+            self.lcd.show(*mode_lcd)
+            self.speaker.say("Select the game mode. Say Magnus P V P, or Magnus P V E.", wait=True)
+
+    def _prompt_difficulty_level(self) -> int | None:
+        """Pergunta o nivel de dificuldade entre 1 e 10 (Magnus Level <1-10>)."""
+        lvl_lcd = (
+            "SELECT DIFFICULTY",
+            "Level 1 - Very Easy",
+            "Level 10 -Super Hard",
+            "Ex: Magnus Level 3",
+        )
+        self.lcd.show(*lvl_lcd)
+        self.speaker.say(
+            "Select the difficulty level from 1 to 10. Say Magnus Level.",
+            wait=True,
+        )
+
+        while True:
+            result = self.listener.listen()
+            # --- Caso reative confirmacao YES/NO no futuro: ---
+            # if result.command and not result.confirmed:
+            #     self.lcd.show(*lvl_lcd)
+            #     self.speaker.say("Cancelled.", wait=True)
+            #     continue
+            if result.wake_detected and not result.command:
+                self._command_not_recognized()
+                self.lcd.show(*lvl_lcd)
+                continue
+            if not result.confirmed:
+                continue
+
+            cmd = result.command
+            if isinstance(cmd, LevelCommand) and 1 <= cmd.level <= 10:
+                return cmd.level
+            if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
+                return None
+
+            self.lcd.show(*lvl_lcd)
+            self.speaker.say(
+                "Select the difficulty level from 1 to 10. Say Magnus Level.",
+                wait=True,
+            )
+
+    def _prompt_piece_color(self) -> bool | None:
+        """Pergunta a cor das pecas do jogador no modo PvE (Magnus White ou Magnus Black)."""
+        color_lcd = (
+            "SELECT PIECE COLOR",
+            "White",
+            "Black",
+            "Ex: Magnus White",
+        )
+        self.lcd.show(*color_lcd)
+        self.speaker.say(
+            "Select the piece color. Say Magnus White, or Magnus Black.",
+            wait=True,
+        )
+
+        while True:
+            result = self.listener.listen()
+            # --- Caso reative confirmacao YES/NO no futuro: ---
+            # if result.command and not result.confirmed:
+            #     self.lcd.show(*color_lcd)
+            #     self.speaker.say("Cancelled.", wait=True)
+            #     continue
+            if result.wake_detected and not result.command:
+                self._command_not_recognized()
+                self.lcd.show(*color_lcd)
+                continue
+            if not result.confirmed:
+                continue
+
+            cmd = result.command
+            if isinstance(cmd, ActionCommand):
+                if cmd.action == "COLOR_WHITE":
+                    return chess.WHITE
+                if cmd.action == "COLOR_BLACK":
+                    return chess.BLACK
+                if cmd.action == "RESIGN_GAME":
+                    return None
+
+            self.lcd.show(*color_lcd)
+            self.speaker.say(
+                "Select the piece color. Say Magnus White, or Magnus Black.",
+                wait=True,
+            )
+
+    def _verify_initial_board_setup(self) -> bool:
+        """
+        Apos o Homing do Gantry, captura uma foto do tabuleiro para verificar se
+        todas as pecas estao nas posicoes iniciais corretas.
+        Se nao estiverem, avisa no Speaker/LCD/LED e aguarda ``MAGNUS VALIDATE``
+        para checar novamente.
+        """
+        self.planner.reset()
+        if self.camera is None or not self.camera.is_ready:
+            return True
+
+        while True:
+            self.lcd.show(
+                "CHECKING BOARD...",
+                "CAMERA CAPTURING",
+                "PLEASE WAIT",
+                "",
+            )
+            ver = self.camera.verify_gantry_position(
+                self.planner.board,
+                last_move=None,
+                settle_seconds=0.5,
+            )
+            if ver.success and len(ver.mismatches) == 0:
+                self.lcd.show(
+                    "BOARD VERIFIED",
+                    "ALL PIECES IN PLACE",
+                    "STARTING GAME...",
+                    "",
+                )
                 return True
 
-            if isinstance(cmd, ActionCommand):
-                if cmd.action == "MODE_PVE":
-                    self.game_mode = "pve"
-                    self.black_control = "computer"
-                    self._persist_settings()
-                    self.lcd.show("MODE: PVE", f"LEVEL {self.level}", "SAY LEVEL 1-8", "OR MAGNUS START")
-                    self.speaker.say(f"Player versus computer selected. Say level one to eight, or say Magnus start.")
+            # Pecas fora do lugar -> avisa no speaker, LCD e LED
+            err_lcd = (
+                "PIECES OUT OF PLACE",
+                "Check board setup",
+                "When ready, say:",
+                "MAGNUS VALIDATE",
+            )
+            self.lcd.show(*err_lcd)
+            self.speaker.say(
+                "The pieces are not in the correct positions. "
+                "When they are in the correct positions, use the command Magnus Validate to check again.",
+                wait=False,
+            )
+            self.leds.blink_both("red", cfg.BLINK_ERROR_SECONDS)
+            self.speaker.wait_idle()
+
+            # Aguarda o jogador dizer MAGNUS VALIDATE para verificar novamente
+            while True:
+                result = self.listener.listen()
+                if result.wake_detected and not result.command:
+                    self._command_not_recognized()
+                    self.lcd.show(*err_lcd)
                     continue
-
-                if cmd.action == "MODE_PVP":
-                    self.game_mode = "pvp"
-                    if self.black_control == "computer":
-                        self.black_control = "manual"
-                    self._persist_settings()
-                    self.lcd.show(
-                        "MODE: PVP",
-                        f"W:{self.white_control.upper()} B:{self.black_control.upper()}",
-                        "SAY: MANUAL / VOICE",
-                        "OR MAGNUS START",
-                    )
-                    self.speaker.say(
-                        f"Player versus player selected. White is {self.white_control}, "
-                        f"Black is {self.black_control}. Say Magnus manual, Magnus voice, or Magnus start."
-                    )
+                if not result.confirmed:
                     continue
-
-                if cmd.action == "MODE_MANUAL":
-                    self.white_control = "manual"
-                    if self.game_mode == "pvp":
-                        self.black_control = "manual"
-                    self._persist_settings()
-                    self.lcd.show("MANUAL MODE SET", "USE MAGNUS VALIDATE", "SAY: MAGNUS START", "")
-                    self.speaker.say("Manual mode enabled. Say Magnus start to begin.")
-                    continue
-
-                if cmd.action == "MODE_VOICE":
-                    self.white_control = "voice"
-                    if self.game_mode == "pvp":
-                        self.black_control = "voice"
-                    self._persist_settings()
-                    self.lcd.show("VOICE MODE SET", "GANTRY ENABLED", "SAY: MAGNUS START", "")
-                    self.speaker.say("Voice and gantry mode enabled. Say Magnus start to begin.")
-                    continue
-
-                if cmd.action == "NEW_GAME":
-                    self._sync_settings_from_disk()
-                    if self.game_mode == "pvp":
-                        self.lcd.show(
-                            "STARTING PVP",
-                            f"W:{self.white_control.upper()}",
-                            f"B:{self.black_control.upper()}",
-                            "STARTING...",
-                        )
-                        self.speaker.say("Starting Player versus Player game.")
-                    else:
-                        self.lcd.show("LEVEL SELECTED", f"LEVEL {self.level}", "STARTING...", "")
-                        self.speaker.say(f"Starting with level {self.level}.")
-                    return True
-
-                if cmd.action == "RESIGN_GAME":
+                cmd = result.command
+                if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
+                    break
+                if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
                     return False
-
-            self.speaker.say("Please choose a level from one to eight, P V P, or say start.")
+                self.lcd.show(*err_lcd)
+                self.speaker.say(
+                    "Please arrange the pieces in the starting positions and say Magnus Validate.",
+                    wait=True,
+                )
 
     def _connect_gantry(self) -> None:
         try:
@@ -465,7 +576,7 @@ class VoiceChessGame:
         if not self._stockfish_path:
             raise GameAbort("Stockfish nao encontrado! No Linux/Raspberry Pi instale com: sudo apt install stockfish")
         self._engine = chess.engine.SimpleEngine.popen_uci(self._stockfish_path)
-        skill, elo = cfg.SKILL_MAP[self.level]
+        skill, elo = cfg.SKILL_MAP.get(self.level, cfg.SKILL_MAP[cfg.DEFAULT_LEVEL])
         try:
             self._engine.configure({"Skill Level": skill})
             if elo:
@@ -489,7 +600,11 @@ class VoiceChessGame:
 
     def _play(self) -> None:
         self.planner.reset()
-        if self.game_mode == "pve" or self._control_for(chess.BLACK) == "computer":
+        if (
+            self.game_mode == "pve"
+            or self._control_for(chess.WHITE) == "computer"
+            or self._control_for(chess.BLACK) == "computer"
+        ):
             self._start_engine()
 
         if self.game_mode == "pvp":
@@ -501,8 +616,9 @@ class VoiceChessGame:
             )
             self.speaker.say("Player versus Player game started. White moves first.")
         else:
-            self.lcd.show("GAME STARTED", "YOU: WHITE")
-            self.speaker.say("Game started. You play white.")
+            you_color = "BLACK" if self.player_color == chess.BLACK else "WHITE"
+            self.lcd.show("GAME STARTED", f"YOU: {you_color}")
+            self.speaker.say(f"Game started. You play {you_color.lower()}.")
 
         save_logical_board_snapshot(self.planner.board, status_text=f"Em jogo ({self.game_mode.upper()})")
 
@@ -515,7 +631,7 @@ class VoiceChessGame:
 
             if control == "computer":
                 move = self._computer_move()
-                self._execute(move, COMPUTER)
+                self._execute(move, side_led)
             elif control == "manual":
                 ok = self._manual_player_turn(turn_color)
                 if not ok:                                     # desistiu
@@ -649,26 +765,20 @@ class VoiceChessGame:
             self._command_not_recognized(side=side_led)
 
     def _player_move(self, turn_color: bool = chess.WHITE) -> chess.Move | None:
-        """Espera MAGNUS MOVE [FROM] [TO] confirmado (ou MAGNUS VALIDATE). None = jogador desistiu."""
         side_led = self._side_led(turn_color)
         color_name = "WHITE" if turn_color == chess.WHITE else "BLACK"
         while True:
-            self.lcd.show(
-                f"YOUR TURN ({color_name})",
-                "SAY: MAGNUS",
-                "THEN YOUR MOVE",
-                "(ex: Move E2 to E4)",
-            )
+            self.lcd.show(f"{color_name} TURN", "SAY: MAGNUS MOVE")
             result = self.listener.listen()
             if result.command and not result.confirmed:
                 self.lcd.show(
-                    "MOVE CANCELLED",
-                    f"YOUR TURN ({color_name})",
+                    "=== VOICE CHESS ===",
+                    "CANCELLED",
                     "SAY: MAGNUS MOVE",
-                    "TRY AGAIN",
+                    "EX: MOVE E2 TO E4",
                 )
-                self.speaker.say("Move cancelled.", wait=False)
-                time.sleep(1.5)
+                self.speaker.say("Cancelled.", wait=False)
+                time.sleep(1.0)
                 continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized(side=side_led)
@@ -678,27 +788,31 @@ class VoiceChessGame:
             cmd = result.command
             if isinstance(cmd, ActionCommand) and cmd.action == "RESIGN_GAME":
                 return None
-            if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE" and self.camera is not None and self.camera.is_ready:
-                self.lcd.show("VALIDATING MOVE", "CAMERA CAPTURING...", "PLEASE WAIT", "")
-                val = self.camera.validate_manual_turn(
-                    self.planner.board,
-                    is_phys_valid_fn=self.planner.is_phys_valid,
-                )
-                if val.valid and val.move is not None:
-                    self.leds.set(side_led, "green")
-                    self.lcd.show(*val.lcd_lines)
-                    self.speaker.say(val.speech, wait=True)
-                    self.planner.apply_manual_move(val.move)
-                    self.leds.off(side_led)
-                    self._check_alert_after_move()
-                    setattr(val.move, "_already_applied", True)
-                    return val.move
-                else:
-                    self.lcd.show(*val.lcd_lines)
-                    self.speaker.say(val.speech, wait=False)
-                    self.leds.blink(side_led, "red", cfg.BLINK_ERROR_SECONDS)
-                    self.speaker.wait_idle()
-                    continue
+
+            # Mesmo no modo de voz, se o jogador mover na mao e disser MAGNUS VALIDATE, aceita!
+            if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
+                if self.camera is not None and self.camera.is_ready:
+                    self.lcd.show("VALIDATING MOVE", "CAMERA CAPTURING...", "PLEASE WAIT", "")
+                    val = self.camera.validate_manual_turn(
+                        self.planner.board,
+                        is_phys_valid_fn=self.planner.is_phys_valid,
+                    )
+                    if val.valid and val.move is not None:
+                        self.leds.set(side_led, "green")
+                        self.lcd.show(*val.lcd_lines)
+                        self.speaker.say(val.speech, wait=True)
+                        self.planner.apply_manual_move(val.move)
+                        self.leds.off(side_led)
+                        self._check_alert_after_move()
+                        setattr(val.move, "_already_applied", True)
+                        return val.move
+                    else:
+                        self.lcd.show(*val.lcd_lines)
+                        self.speaker.say(val.speech, wait=False)
+                        self.leds.blink(side_led, "red", cfg.BLINK_ERROR_SECONDS)
+                        self.speaker.wait_idle()
+                        continue
+
             if not isinstance(cmd, MoveCommand):
                 self._command_not_recognized(side=side_led)
                 continue

@@ -274,8 +274,15 @@ def test_parse_validate_and_mode_commands():
     assert parse("player versus player") == (ActionCommand("MODE_PVP"), None)
     assert parse("pvp") == (ActionCommand("MODE_PVP"), None)
     assert parse("player versus computer") == (ActionCommand("MODE_PVE"), None)
+    assert parse("player versus engine") == (ActionCommand("MODE_PVE"), None)
+    assert parse("pve") == (ActionCommand("MODE_PVE"), None)
     assert parse("manual mode") == (ActionCommand("MODE_MANUAL"), None)
     assert parse("voice mode") == (ActionCommand("MODE_VOICE"), None)
+    assert parse("white") == (ActionCommand("COLOR_WHITE"), None)
+    assert parse("black") == (ActionCommand("COLOR_BLACK"), None)
+    from voice.parser import LevelCommand
+    assert parse("level ten") == (LevelCommand(10), None)
+    assert parse("level 10") == (LevelCommand(10), None)
 
 
 def test_verify_board_position_post_gantry():
@@ -439,3 +446,85 @@ def test_pvp_manual_player_turn_with_magnus_validate():
     # Logical board and physical grid must be updated with e2e4 without running the Gantry
     assert game.planner.board.peek() == valid_move
     assert len(gantry.executed) == 0
+
+
+def test_configure_pve_menu_flow(monkeypatch):
+    from voice.parser import LevelCommand
+
+    leds = DummyLeds()
+    lcd = DummyLcd()
+    speaker = DummySpeaker()
+    gantry = DummyGantry()
+    listener = DummyListener([
+        ListenResult(ActionCommand("MODE_PVE"), confirmed=True),
+        ListenResult(LevelCommand(10), confirmed=True),
+        ListenResult(ActionCommand("COLOR_BLACK"), confirmed=True),
+    ])
+
+    game = VoiceChessGame(
+        leds, lcd, speaker, gantry, lambda *args: listener,
+    )
+    monkeypatch.setattr(game, "_sync_settings_from_disk", lambda: None)
+    monkeypatch.setattr(game, "_persist_settings", lambda: None)
+
+    assert game._configure() is True
+
+    assert game.game_mode == "pve"
+    assert game.level == 10
+    assert game.player_color == chess.BLACK
+    assert game.black_control == "voice"
+    assert game.white_control == "computer"
+    assert any("Select the game mode" in s for s in speaker.spoken)
+    assert any("Select the difficulty level from 1 to 10" in s for s in speaker.spoken)
+    assert any("Select the piece color" in s for s in speaker.spoken)
+
+
+def test_verify_initial_board_setup_requires_magnus_validate():
+    leds = DummyLeds()
+    lcd = DummyLcd()
+    speaker = DummySpeaker()
+    gantry = DummyGantry()
+
+    listener = DummyListener([
+        ListenResult(ActionCommand("VALIDATE_MOVE"), confirmed=True),
+    ])
+
+    bad_check = PositionVerificationResult(
+        success=False,
+        move_uci=None,
+        origin_ok=True,
+        dest_ok=True,
+        mismatches=[{"square": "E2", "expected": "white", "detected": "empty", "piece": None}],
+        message="Mismatch on E2",
+        speech="Mismatch on E2",
+        lcd_lines=("ERR E2", "CHECK BOARD"),
+        confidence=0.95,
+    )
+    ok_check = PositionVerificationResult(
+        success=True,
+        move_uci=None,
+        origin_ok=True,
+        dest_ok=True,
+        mismatches=[],
+        message="Board ok",
+        speech="",
+        lcd_lines=("BOARD VERIFIED", "POSITION OK"),
+        confidence=0.98,
+    )
+
+    mock_camera = MagicMock()
+    mock_camera.is_ready = True
+    mock_camera.verify_gantry_position.side_effect = [bad_check, ok_check]
+
+    game = VoiceChessGame(
+        leds, lcd, speaker, gantry, lambda *args: listener,
+        camera=mock_camera, game_mode="pve",
+    )
+    assert game._verify_initial_board_setup() is True
+
+    assert mock_camera.verify_gantry_position.call_count == 2
+    assert any("The pieces are not in the correct positions" in s for s in speaker.spoken)
+    assert any("Magnus Validate" in s for s in speaker.spoken)
+    assert ("blink_both", "red", 3.0) in leds.history
+    assert lcd.lines[0] == "BOARD VERIFIED"
+

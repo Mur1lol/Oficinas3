@@ -214,14 +214,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="field-box" id="levelBox">
             <label for="levelSelect">Dificuldade Stockfish (PvE)</label>
             <select id="levelSelect" class="point-input">
-              <option value="1">Nível 1 — Muito Fácil</option>
-              <option value="2">Nível 2 — Fácil</option>
-              <option value="3">Nível 3 — Iniciante</option>
-              <option value="4" selected>Nível 4 — Intermediário</option>
-              <option value="5">Nível 5 — Avançado</option>
-              <option value="6">Nível 6 — Forte</option>
-              <option value="7">Nível 7 — Mestre</option>
-              <option value="8">Nível 8 — Máximo</option>
+              <option value="1">Nível 1 — Very Easy (Muito Fácil)</option>
+              <option value="2">Nível 2 — Easy (Fácil)</option>
+              <option value="3" selected>Nível 3 — Beginner (Iniciante)</option>
+              <option value="4">Nível 4 — Casual</option>
+              <option value="5">Nível 5 — Intermediate (Intermediário)</option>
+              <option value="6">Nível 6 — Club Player</option>
+              <option value="7">Nível 7 — Advanced (Avançado)</option>
+              <option value="8">Nível 8 — Expert</option>
+              <option value="9">Nível 9 — Master (Mestre)</option>
+              <option value="10">Nível 10 — Super Hard (Máximo)</option>
             </select>
           </div>
 

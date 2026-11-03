@@ -5,7 +5,15 @@ from loguru import logger
 
 from .audio_capture import AudioStream
 from .config import Settings
-from .parser import ActionCommand, Command, IMMEDIATE_ACTIONS, parse, parse_confirmation
+from .parser import (
+    ActionCommand,
+    Command,
+    IMMEDIATE_ACTIONS,
+    IMMEDIATE_LEVEL,
+    LevelCommand,
+    parse,
+    parse_confirmation,
+)
 from .validator import validate
 
 
@@ -88,10 +96,16 @@ class VoiceCommandPipeline:
         checked = validate(command, reason)
         if not checked["valid"]:
             return self._failure(command, checked["reason"], wake_detected=True)
-        if isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS:
+
+        # Comandos imediatos (ex: START NEW GAME, PVP/PVE, LEVEL, WHITE/BLACK, VALIDATE)
+        # nao precisam de confirmacao YES/NO. Caso mude de ideia, comente o bloco abaixo:
+        if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
+            isinstance(command, LevelCommand) and IMMEDIATE_LEVEL
+        ):
             stream.check()
             self._set_state(PipelineState.EMIT, command)
             return VoiceResult(command, confirmed=True, wake_detected=True)
+
         stream.discard_pending()
         self._set_state(PipelineState.CONFIRMATION_LISTEN, command)
         answer = self.recognizer.listen(stream, "confirmation", self.settings.confirmation_timeout)

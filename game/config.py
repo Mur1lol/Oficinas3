@@ -80,18 +80,20 @@ TTS_PIPER_MODEL = ROOT / "voice" / "models" / "en_US-amy-low.onnx"
 VOICE_CONFIG = ROOT / "voice.toml"
 
 # ── Stockfish ─────────────────────────────────────────────────────────────────
-# nivel -> (Skill Level, UCI_Elo ou None)
+# nivel (1 a 10) -> (Skill Level, UCI_Elo ou None)
 SKILL_MAP = {
-    1: (0, 800),
-    2: (3, 1000),
-    3: (6, 1200),
-    4: (9, 1500),
-    5: (12, 1700),
-    6: (15, 2000),
-    7: (18, 2300),
-    8: (20, None),
+    1:  (0, 800),     # Very Easy
+    2:  (2, 950),
+    3:  (4, 1100),
+    4:  (6, 1300),
+    5:  (9, 1500),
+    6:  (11, 1700),
+    7:  (14, 1950),
+    8:  (16, 2200),
+    9:  (18, 2500),
+    10: (20, None),   # Super Hard
 }
-DEFAULT_LEVEL = 4
+DEFAULT_LEVEL = 3
 ENGINE_THINK_SECONDS = 0.5
 
 
