@@ -153,6 +153,27 @@ class PerspectiveCalibrator:
             log.warning("[Calibration] No valid calibration — returning resized crop.")
             return cv2.resize(image, (TOTAL_W, TOTAL_H))
 
+        img_h, img_w = image.shape[:2]
+        cal_res = self._cal.capture_resolution
+        if (
+            cal_res
+            and len(cal_res) == 2
+            and cal_res[0] > 0
+            and cal_res[1] > 0
+            and (img_w != cal_res[0] or img_h != cal_res[1])
+        ):
+            sx = img_w / float(cal_res[0])
+            sy = img_h / float(cal_res[1])
+            src = np.array(self._cal.board_corners, dtype=np.float32) * np.array([sx, sy], dtype=np.float32)
+            dst = np.array([
+                [CEM_W,            0],
+                [CEM_W + BOARD_SZ, 0],
+                [CEM_W + BOARD_SZ, BOARD_SZ],
+                [CEM_W,            BOARD_SZ],
+            ], dtype=np.float32)
+            M = cv2.getPerspectiveTransform(src, dst)
+            return cv2.warpPerspective(image, M, (TOTAL_W, TOTAL_H))
+
         warped = cv2.warpPerspective(image, self._M, (TOTAL_W, TOTAL_H))
         return warped
 

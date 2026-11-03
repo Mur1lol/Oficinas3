@@ -4,7 +4,9 @@ vision/camera.py
 USB camera control for the VoiceChess vision subsystem.
 
 Wraps OpenCV's VideoCapture into a context manager with warmup,
-retry logic, and quality validation.
+retry logic, and quality validation. Also supports transparent frame
+sharing when ``web_calibrator.py`` is running simultaneously on the
+same machine (avoiding V4L2/DirectShow single-process device locks).
 
 Usage
 -----
@@ -20,6 +22,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -63,11 +66,14 @@ class CameraController:
         device_index: int = cfg.CAMERA_DEVICE_INDEX,
         resolution: tuple[int, int] = cfg.CAMERA_RESOLUTION,
         warmup_seconds: float = cfg.CAMERA_WARMUP_SECONDS,
+        allow_web_bridge: bool = True,
     ) -> None:
-        self._device_index  = device_index
-        self._resolution    = resolution
+        self._device_index   = device_index
+        self._resolution     = resolution
         self._warmup_seconds = warmup_seconds
+        self._allow_web_bridge = allow_web_bridge
         self._cap: cv2.VideoCapture | None = None
+        self._using_web_bridge: bool = False
         self._state = CameraState.IDLE
 
     # ------------------------------------------------------------------
@@ -87,23 +93,37 @@ class CameraController:
 
     def open(self) -> None:
         """Open the camera and perform auto-exposure warmup."""
-        if self._cap is not None and self._cap.isOpened():
+        if self.is_ready:
             return
 
+        self._using_web_bridge = False
         log.info(
             "[Camera] Opening device %d at %dx%d ...",
             self._device_index, *self._resolution,
         )
-        self._cap = cv2.VideoCapture(self._device_index, cv2.CAP_DSHOW)
 
-        if not self._cap.isOpened():
-            # Fallback: try without backend hint (Linux / Pi)
-            self._cap = cv2.VideoCapture(self._device_index)
+        # Try preferred device index first, then fallback indices [0, 1, 2]
+        candidates = [self._device_index] + [i for i in (0, 1, 2) if i != self._device_index]
+        for idx in candidates:
+            cap = self._try_open_index(idx)
+            if cap is not None and cap.isOpened():
+                self._cap = cap
+                self._device_index = idx
+                break
 
-        if not self._cap.isOpened():
+        if self._cap is None or not self._cap.isOpened():
+            # Check if web_calibrator.py is running on localhost:5000 holding the camera
+            if self._allow_web_bridge and self._fetch_web_bridge_frame() is not None:
+                self._using_web_bridge = True
+                log.info(
+                    "[Camera] USB camera is in use by web_calibrator — "
+                    "bridging live frames via http://127.0.0.1:5000/api/snapshot"
+                )
+                return
+
             raise RuntimeError(
                 f"[Camera] Failed to open device {self._device_index}. "
-                "Check that the USB camera is connected."
+                "Check that the USB camera is connected and not locked by another process."
             )
 
         # Set resolution
@@ -112,14 +132,43 @@ class CameraController:
 
         actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        log.info("[Camera] Actual resolution: %dx%d", actual_w, actual_h)
+        log.info("[Camera] Actual resolution (device %d): %dx%d", self._device_index, actual_w, actual_h)
 
         # Warmup: discard frames until auto-exposure stabilises
         self._warmup()
         log.info("[Camera] Ready.")
 
+    @staticmethod
+    def _try_open_index(idx: int) -> cv2.VideoCapture | None:
+        if sys.platform == "win32":
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            if cap is not None and cap.isOpened():
+                return cap
+        else:
+            cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+            if cap is not None and cap.isOpened():
+                return cap
+        cap = cv2.VideoCapture(idx)
+        if cap is not None and cap.isOpened():
+            return cap
+        if cap is not None:
+            cap.release()
+        return None
+
+    @staticmethod
+    def _fetch_web_bridge_frame(url: str = "http://127.0.0.1:5000/api/snapshot") -> np.ndarray | None:
+        try:
+            with urllib.request.urlopen(url, timeout=1.5) as resp:
+                data = resp.read()
+            arr = np.frombuffer(data, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            return frame
+        except Exception:
+            return None
+
     def close(self) -> None:
         """Release the camera."""
+        self._using_web_bridge = False
         if self._cap is not None:
             self._cap.release()
             self._cap = None
@@ -128,6 +177,8 @@ class CameraController:
 
     @property
     def is_ready(self) -> bool:
+        if self._using_web_bridge:
+            return True
         return self._cap is not None and self._cap.isOpened()
 
     # ------------------------------------------------------------------
@@ -152,6 +203,15 @@ class CameraController:
             raise RuntimeError("[Camera] Camera is not open. Call open() first.")
 
         self._state = CameraState.CAPTURING
+        if self._using_web_bridge:
+            frame = self._fetch_web_bridge_frame()
+            if frame is None:
+                self._state = CameraState.FAILED
+                raise RuntimeError("[Camera] Failed to read frame from web_calibrator bridge.")
+            self._state = CameraState.IDLE
+            return frame
+
+        assert self._cap is not None
         ret, frame = self._cap.read()
         if not ret or frame is None:
             self._state = CameraState.FAILED
@@ -201,6 +261,8 @@ class CameraController:
 
     def _warmup(self) -> None:
         """Discard frames during the warmup period."""
+        if self._cap is None:
+            return
         log.info("[Camera] Warming up for %.1f s ...", self._warmup_seconds)
         deadline = time.monotonic() + self._warmup_seconds
         while time.monotonic() < deadline:

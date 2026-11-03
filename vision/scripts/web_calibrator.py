@@ -324,8 +324,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <!-- COLUNA 1: CAMERA AO VIVO + CANTOS -->
     <div class="card">
       <div class="card-title">
-        <span>Câmera (arraste os 4 cantos)</span>
-        <div style="display: flex; gap: 0.4rem;">
+        <span>Câmera (arraste os 4 cantos) <span id="camSourceBadge" class="badge badge-info" style="margin-left:0.35rem;">Verificando...</span></span>
+        <div style="display: flex; gap: 0.4rem; align-items: center;">
+          <select id="camDeviceSelect" class="point-input" style="padding: 0.2rem 0.4rem; font-size: 0.75rem;" title="Índice da câmera USB">
+            <option value="0">Cam 0</option>
+            <option value="1">Cam 1</option>
+            <option value="2">Cam 2</option>
+          </select>
+          <button class="btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;" onclick="reconnectCamera()">🔌 Reconectar</button>
           <button id="btnToggleLive" class="btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;" onclick="toggleLiveMode()">⏸️ Congelar</button>
           <button class="btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;" onclick="refreshStream()">🔄 Recarregar</button>
         </div>
@@ -900,8 +906,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       });
     }
 
+    function updateCameraBadge(hasRealCamera, deviceIdx) {
+      const b = document.getElementById("camSourceBadge");
+      if (!b) return;
+      if (hasRealCamera) {
+        b.className = "badge badge-ok";
+        b.textContent = "📷 Câmera USB Ativa (Cam " + (deviceIdx ?? 0) + ")";
+      } else {
+        b.className = "badge badge-err";
+        b.textContent = "⚠️ Sem Câmera USB (Usando Referência Salva)";
+      }
+    }
+
+    function reconnectCamera() {
+      const dev = parseInt(document.getElementById("camDeviceSelect").value, 10);
+      post("/api/reconnect_camera", { device_index: dev }).then(res => {
+        updateCameraBadge(res.camera_connected, res.device_index);
+        if (res.frame_size) applyFrameSize(res.frame_size[0], res.frame_size[1]);
+        refreshStream();
+        if (res.camera_connected) {
+          showAlert("Câmera USB conectada com sucesso no dispositivo " + res.device_index + "!");
+        } else {
+          showAlert("Não foi possível abrir a câmera USB (verifique se ela está conectada ou se outro terminal está usando /dev/video" + dev + ").", false);
+        }
+      });
+    }
+
     function reloadSaved(silent) {
       fetch("/api/status").then(r => r.json()).then(data => {
+        updateCameraBadge(data.camera_connected, data.device_index);
+        if (data.device_index !== undefined) {
+          document.getElementById("camDeviceSelect").value = String(data.device_index);
+        }
         if (data.frame_size) applyFrameSize(data.frame_size[0], data.frame_size[1]);
         if (data.layout) { layout = data.layout; previewBox.style.aspectRatio = layout.total_w + " / " + layout.total_h; }
         const cal = data.calibration;
@@ -936,6 +972,7 @@ class WebCalibratorApp:
 
         self.active_corners: list[list[float]] = []
         self.active_orientation: str = "normal"
+        self.calibrated_resolution: list[int] = [640, 480]
 
         # Estado logico do tabuleiro para testes/simulacao de MAGNUS VALIDATE e Pos-Gantry
         self.logical_board: chess.Board = chess.Board()
@@ -954,6 +991,8 @@ class WebCalibratorApp:
                 if cal.is_valid():
                     self.active_corners = cal.board_corners
                     self.active_orientation = cal.board_orientation
+                    if cal.capture_resolution and len(cal.capture_resolution) == 2:
+                        self.calibrated_resolution = list(cal.capture_resolution)
             except Exception:
                 pass
 
@@ -970,27 +1009,83 @@ class WebCalibratorApp:
 
     def _init_camera(self) -> None:
         try:
-            self.camera = CameraController(device_index=self.device_index)
+            self.camera = CameraController(
+                device_index=self.device_index,
+                allow_web_bridge=False,
+            )
             self.camera.open()
+            self.device_index = self.camera._device_index
             log.info("Câmera aberta no dispositivo %d", self.device_index)
         except Exception as e:
-            log.warning("Não foi possível abrir a câmera (%s). Usando frame simulado.", e)
+            log.warning("Não foi possível abrir a câmera (%s). Usando referência salva em modo simulado.", e)
             self.camera = None
             self.last_frame = self._generate_synthetic_board()
 
-    @staticmethod
-    def _generate_synthetic_board() -> np.ndarray:
-        w, h = cfg.CAMERA_RESOLUTION
-        img = np.full((h, w, 3), 40, dtype=np.uint8)
-        cv2.putText(img, "Sem Camera Real - Frame Simulado", (w // 2 - 250, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-        bx, by, bw = w // 2 - 250, h // 2 - 250, 500
-        sz = bw // 8
+    def reconnect_camera(self, device_index: Optional[int] = None) -> dict:
+        with self.lock:
+            if self.camera is not None:
+                self.camera.close()
+                self.camera = None
+            if device_index is not None:
+                self.device_index = int(device_index)
+            self.last_frame = None
+        self._init_camera()
+        return {
+            "success": True,
+            "camera_connected": self.has_real_camera(),
+            "device_index": self.device_index,
+            "frame_size": self.frame_size(),
+        }
+
+    def has_real_camera(self) -> bool:
+        return self.camera is not None and self.camera.is_ready
+
+    def _generate_synthetic_board(self) -> np.ndarray:
+        """
+        Gera um quadro simulado na MESMA resolucao da calibracao salva (ex: 640x480)
+        e projeta a imagem real de referencia (reference_empty.png) exatamente dentro
+        dos 4 cantos calibrados para que a grade 8x8 fique 100% alinhada mesmo sem camera USB.
+        """
+        w, h = self.calibrated_resolution if len(self.calibrated_resolution) == 2 else (640, 480)
+        img = np.full((h, w, 3), 32, dtype=np.uint8)
+
+        corners = self.active_corners if len(self.active_corners) == 4 else [
+            [int(w * 0.24), int(h * 0.06)],
+            [int(w * 0.90), int(h * 0.06)],
+            [int(w * 0.90), int(h * 0.94)],
+            [int(w * 0.24), int(h * 0.94)],
+        ]
+        dst_pts = np.array(corners, dtype=np.float32)
+
+        if REF_PATH.is_file():
+            ref = cv2.imread(str(REF_PATH))
+            if ref is not None and ref.shape[1] >= CEM_W + BOARD_SZ:
+                src_pts = np.array([
+                    [CEM_W,            0],
+                    [CEM_W + BOARD_SZ, 0],
+                    [CEM_W + BOARD_SZ, BOARD_SZ],
+                    [CEM_W,            BOARD_SZ],
+                ], dtype=np.float32)
+                M_inv = cv2.getPerspectiveTransform(src_pts, dst_pts)
+                warped_back = cv2.warpPerspective(ref, M_inv, (w, h))
+                mask = np.zeros((h, w), dtype=np.uint8)
+                cv2.fillConvexPoly(mask, dst_pts.astype(np.int32), 255)
+                img[mask > 0] = warped_back[mask > 0]
+                return img
+
+        # Fallback caso nao exista reference_empty.png
+        board_tex = np.zeros((BOARD_SZ, BOARD_SZ, 3), dtype=np.uint8)
+        sq = BOARD_SZ // 8
         for r in range(8):
             for c in range(8):
                 color = (200, 200, 200) if (r + c) % 2 == 0 else (60, 60, 60)
-                cv2.rectangle(img, (bx + c * sz, by + r * sz),
-                              (bx + (c + 1) * sz, by + (r + 1) * sz), color, -1)
+                cv2.rectangle(board_tex, (c * sq, r * sq), ((c + 1) * sq, (r + 1) * sq), color, -1)
+        src_pts = np.array([[0, 0], [BOARD_SZ, 0], [BOARD_SZ, BOARD_SZ], [0, BOARD_SZ]], dtype=np.float32)
+        M_inv = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        warped_back = cv2.warpPerspective(board_tex, M_inv, (w, h))
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, dst_pts.astype(np.int32), 255)
+        img[mask > 0] = warped_back[mask > 0]
         return img
 
     def get_frame(self) -> np.ndarray:
@@ -1420,6 +1515,8 @@ def make_handler(app: WebCalibratorApp):
                 self._json({
                     "calibration": cal.to_dict() if cal else None,
                     "frame_size": app.frame_size(),
+                    "camera_connected": app.has_real_camera(),
+                    "device_index": app.device_index,
                     "layout": {"cem_w": CEM_W, "board_sz": BOARD_SZ,
                                "total_w": TOTAL_W, "total_h": TOTAL_H},
                 })
@@ -1477,6 +1574,8 @@ def make_handler(app: WebCalibratorApp):
             elif path == "/api/clear_history":
                 clear_validation_history()
                 self._json({"success": True})
+            elif path == "/api/reconnect_camera":
+                self._json(app.reconnect_camera(data.get("device_index")))
             else:
                 self.send_error(404, "Not Found")
 
