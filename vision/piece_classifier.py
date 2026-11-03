@@ -3,12 +3,15 @@ vision/piece_classifier.py
 ==========================
 Classifies the *type* of a piece (pawn, rook, knight, bishop, queen, king)
 by multi-scale template matching against the reference images stored in
-``pieces/`` (``<Type>_<Color>.png``).
+``pieces/`` (``<Type>_<Color>.png``) or real camera samples stored in
+``pieces/samples/<type>_<color>/``.
 
-No training is needed: each reference image is converted to a blurred edge
-map (robust to lighting and to the piece's fill colour) and matched against
-the edge map of the square ROI at several scales and rotations (0° and 180°
-by default, because black pieces face the opposite side of the board).
+Also provides:
+* ``locate_puck_center(gray)`` — dynamic localization of the physical circular
+  puck within a square ROI (tolerant to off-center pieces, cast shadows, and
+  printed square target dots).
+* ``detect_puck_color(gray, center)`` — illumination-invariant relative contrast
+  classifier separating white and black pieces around the located center.
 
 Usage
 -----
@@ -32,11 +35,146 @@ log = logging.getLogger(__name__)
 _PIECE_TYPES = ("pawn", "rook", "knight", "bishop", "queen", "king")
 _TEMPLATE_SIZE = 64  # px, reference icon resized to this before scaling
 
-# Amostras reais: normalizacao 80x80; busca 32x32 ao redor do centro (40, 40)
-# com molde central de 22x22 -> tolera +/- 5 px de deslocamento da peca.
+# Amostras reais: normalizacao 80x80; com auto-centralizacao do disco,
+# busca 28x28 ao redor do centro (40, 40) com molde central de 22x22.
 _SAMPLE_NORM = 80
-_SEARCH_BOX = (24, 56)  # 32x32 search window
+_SEARCH_BOX = (26, 54)  # 28x28 search window around centered icon
 _TPL_BOX = (29, 51)     # 22x22 template window
+
+# ---------------------------------------------------------------------------
+# Precomputed concentric kernels for dynamic puck localization (80x80 scale)
+# ---------------------------------------------------------------------------
+
+_KY, _KX = np.ogrid[-25:26, -25:26]
+_KR = np.sqrt(_KX ** 2 + _KY ** 2)
+
+
+def _norm_kernel(mask: np.ndarray) -> np.ndarray:
+    k = mask.astype(np.float32)
+    s = float(k.sum())
+    return k / s if s > 0 else k
+
+
+_K_ICON  = _norm_kernel(_KR <= 8.5)
+_K_MOAT  = _norm_kernel((_KR >= 11.0) & (_KR <= 14.2))
+_RIM_BAND = (_KR >= 14.8) & (_KR <= 19.0)
+_K_RIM_N = _norm_kernel(_RIM_BAND & (_KY < -4))
+_K_RIM_S = _norm_kernel(_RIM_BAND & (_KY >  4))
+_K_RIM_W = _norm_kernel(_RIM_BAND & (_KX < -4))
+_K_RIM_E = _norm_kernel(_RIM_BAND & (_KX >  4))
+
+_YG80, _XG80 = np.ogrid[:_SAMPLE_NORM, :_SAMPLE_NORM]
+
+
+def _to_gray80(img: np.ndarray) -> np.ndarray:
+    """Convert BGR/gray image to 80x80 float32 grayscale."""
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
+    if gray.shape[0] != _SAMPLE_NORM or gray.shape[1] != _SAMPLE_NORM:
+        gray = cv2.resize(gray, (_SAMPLE_NORM, _SAMPLE_NORM), interpolation=cv2.INTER_AREA)
+    return np.asarray(gray, dtype=np.float32)
+
+
+def locate_puck_center(gray: np.ndarray) -> tuple[int, int, float, float]:
+    """
+    Locate the physical puck center ``(cx, cy)`` in an 80x80 grayscale ROI.
+
+    Combines 4 concentric geometric invariants of the physical pieces:
+    1. High gradient & local standard deviation inside the central icon (r <= 8.5 px).
+    2. Low gradient & uniform intensity in the solid puck body moat (11.0 <= r <= 14.2 px).
+    3. 360-degree circular outer rim edges across all 4 quadrants (14.8 <= r <= 19.0 px).
+
+    Returns
+    -------
+    (cx, cy, structural_score, icon_std)
+        ``cx, cy`` in [14..66] on the 80x80 grid, ``structural_score`` measuring
+        3D puck + icon presence (empty squares < 2500, occupied > 10000), and
+        ``icon_std`` (local std inside r <= 8.5 around ``(cx, cy)``).
+    """
+    g = _to_gray80(gray)
+    g2 = g * g
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    grad = np.hypot(gx, gy)
+
+    m_icon = cv2.filter2D(g, cv2.CV_32F, _K_ICON)
+    std_icon = np.sqrt(np.maximum(0.0, cv2.filter2D(g2, cv2.CV_32F, _K_ICON) - m_icon * m_icon))
+
+    m_moat = cv2.filter2D(g, cv2.CV_32F, _K_MOAT)
+    std_moat = np.sqrt(np.maximum(0.0, cv2.filter2D(g2, cv2.CV_32F, _K_MOAT) - m_moat * m_moat))
+
+    r_icon = cv2.filter2D(grad, cv2.CV_32F, _K_ICON)
+    r_moat = cv2.filter2D(grad, cv2.CV_32F, _K_MOAT)
+
+    r_N = cv2.filter2D(grad, cv2.CV_32F, _K_RIM_N)
+    r_S = cv2.filter2D(grad, cv2.CV_32F, _K_RIM_S)
+    r_W = cv2.filter2D(grad, cv2.CV_32F, _K_RIM_W)
+    r_E = cv2.filter2D(grad, cv2.CV_32F, _K_RIM_E)
+    r_rim_sym = (
+        np.maximum(1.0, r_N)
+        * np.maximum(1.0, r_S)
+        * np.maximum(1.0, r_W)
+        * np.maximum(1.0, r_E)
+    ) ** 0.25
+
+    s_inner = np.maximum(0.0, r_icon - 0.7 * r_moat) * (std_icon / (std_moat + 12.0))
+    resp = s_inner * r_rim_sym
+
+    sub = resp[14:67, 14:67]
+    iy, ix = np.unravel_index(np.argmax(sub), sub.shape)
+    cx, cy = int(ix + 14), int(iy + 14)
+    return cx, cy, float(resp[cy, cx]), float(std_icon[cy, cx])
+
+
+def detect_puck_color(
+    img: np.ndarray,
+    center: Optional[tuple[int, int]] = None,
+    split_thresh: Optional[float] = None,
+) -> tuple[str, float]:
+    """
+    Illumination-invariant piece colour detection around the located puck center.
+
+    Combines three concentric relative signals around ``(cx, cy)``:
+    1. ``icon_asym``: asymmetry between bright icon pixels (p85) and dark icon
+       pixels (p15) relative to the puck body ring (r = 10.5..14.5 px).
+       White pieces have a bright icon on a dark body (icon_asym >> 0);
+       black pieces have a dark icon on a light body (icon_asym << 0).
+    2. ``rim_diff``: difference between outer rim (r = 15.5..18.0 px) and body ring.
+    3. ``body_val`` vs ``split_thresh`` (fallback absolute reference).
+
+    Because ``icon_asym`` and ``rim_diff`` are differences of concentric rings on
+    the same puck, additive lighting changes cancel out completely and shadows
+    preserve polarity.
+    """
+    g = _to_gray80(img)
+    if center is None:
+        cx, cy, _, _ = locate_puck_center(g)
+    else:
+        cx, cy = int(center[0]), int(center[1])
+
+    d = np.sqrt((_XG80 - cx) ** 2 + (_YG80 - cy) ** 2)
+    body_mask = (d >= 10.5) & (d <= 14.5)
+    rim_mask  = (d >= 15.5) & (d <= 18.0)
+    icon_mask = d <= 8.5
+
+    body_val = float(g[body_mask].mean()) if body_mask.any() else 112.0
+    rim_val  = float(g[rim_mask].mean()) if rim_mask.any() else body_val
+    icon_px  = g[icon_mask]
+    p85 = float(np.percentile(icon_px, 85)) if icon_px.size else body_val
+    p15 = float(np.percentile(icon_px, 15)) if icon_px.size else body_val
+
+    if split_thresh is None:
+        split_thresh = float(getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0))
+
+    icon_asym = (p85 - body_val) - (body_val - p15)
+    rim_diff  = rim_val - body_val
+    score = icon_asym + 1.5 * rim_diff + (split_thresh - body_val) * 0.5
+
+    color = "white" if score >= 0.0 else "black"
+    conf = min(1.0, 0.65 + abs(score) / 250.0)
+    return color, float(conf)
 
 
 def _prep_square(img: np.ndarray) -> np.ndarray:
@@ -48,41 +186,66 @@ def _prep_square(img: np.ndarray) -> np.ndarray:
 
 
 def _extract_icon(
-    img: np.ndarray, color: Optional[str] = None, radius_mask: float = 12.0
+    img: np.ndarray,
+    color: Optional[str] = None,
+    radius_mask: float = 11.5,
+    center: Optional[tuple[int, int]] = None,
 ) -> tuple[np.ndarray, str]:
     """
     Normaliza a imagem da casa recortada (80x80) para isolar o icone gravado no disco:
-    1. Mede o anel do corpo do disco (raio 12-16px).
-    2. Determina a polaridade (branca tem disco escuro com icone claro; preta tem
+    1. Localiza dinamicamente o centro real ``(cx, cy)`` do disco e translada para ``(40, 40)``.
+    2. Mede o anel do corpo do disco (raio 10.5-14.5px ao redor do centro real).
+    3. Determina a polaridade (branca tem disco escuro com icone claro; preta tem
        disco claro com icone escuro).
-    3. Inverte e subtrai o corpo para que o icone fique sempre brilhante sobre fundo preto.
-    4. Aplica mascara circular (raio 12px) que corta fora a borda do disco e a madeira da casa.
+    4. Inverte e subtrai o corpo para que o icone fique sempre brilhante sobre fundo preto.
+    5. Aplica mascara circular e refina o centro pelo centro de massa do icone.
     """
-    if img.ndim == 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = _to_gray80(img)
+    if center is None:
+        cx, cy, _, _ = locate_puck_center(gray)
     else:
-        gray = img
-    gray = cv2.resize(gray, (_SAMPLE_NORM, _SAMPLE_NORM), interpolation=cv2.INTER_AREA)
+        cx, cy = int(center[0]), int(center[1])
 
-    h, w = gray.shape
-    cx, cy = w // 2, h // 2
-    Y, X = np.ogrid[:h, :w]
-    dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
+    # Translada a imagem para centralizar o disco em (40, 40)
+    if cx != 40 or cy != 40:
+        M = np.float32([[1.0, 0.0, float(40 - cx)], [0.0, 1.0, float(40 - cy)]])
+        centered = cv2.warpAffine(
+            gray, M, (_SAMPLE_NORM, _SAMPLE_NORM),
+            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE,
+        )
+    else:
+        centered = gray
 
-    ring_val = float(gray[(dist >= 12) & (dist <= 16)].mean())
-    split_thresh = getattr(cfg, "PIECE_PUCK_SPLIT_THRESHOLD", 112.0)
-    det_color = color if color in ("white", "black") else ("white" if ring_val < split_thresh else "black")
+    dist = np.sqrt((_XG80 - 40) ** 2 + (_YG80 - 40) ** 2)
+    body_val = float(centered[(dist >= 10.5) & (dist <= 14.5)].mean())
+
+    if color in ("white", "black"):
+        det_color = color
+    else:
+        det_color, _ = detect_puck_color(centered, center=(40, 40))
 
     if det_color == "black":
-        norm = ring_val - gray.astype(np.float32)
+        norm = body_val - centered
     else:
-        norm = gray.astype(np.float32) - ring_val
+        norm = centered - body_val
     norm = np.maximum(0.0, norm)
 
     mask = (dist <= radius_mask).astype(np.float32)
     norm = norm * mask
 
-    max_val = norm.max()
+    # Refinamento sub-pixel pelo centro de massa do icone isolado
+    tot = float(norm.sum())
+    if tot > 100.0:
+        icx = float((norm * _XG80).sum() / tot)
+        icy = float((norm * _YG80).sum() / tot)
+        if abs(icx - 40.0) <= 3.5 and abs(icy - 40.0) <= 3.5:
+            M2 = np.float32([[1.0, 0.0, 40.0 - icx], [0.0, 1.0, 40.0 - icy]])
+            norm = cv2.warpAffine(
+                norm, M2, (_SAMPLE_NORM, _SAMPLE_NORM),
+                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0,
+            )
+
+    max_val = float(norm.max())
     if max_val > 5.0:
         norm = (norm / max_val * 255.0).astype(np.uint8)
     else:
@@ -205,7 +368,7 @@ class PieceClassifier:
                 if img is None:
                     continue
                 icon, _ = _extract_icon(img, color=color)
-                # Molde central 22x22 isolando o simbolo
+                # Molde central 22x22 isolando o simbolo ja centralizado em (40, 40)
                 tpl = icon[_TPL_BOX[0]:_TPL_BOX[1], _TPL_BOX[0]:_TPL_BOX[1]]
                 h_t, w_t = tpl.shape
                 for ang in angles:
@@ -220,10 +383,12 @@ class PieceClassifier:
             log.info("[Classifier] Real samples loaded: %s", self.sample_counts())
 
     def _classify_samples(
-        self, roi: np.ndarray, color: Optional[str]
+        self,
+        roi: np.ndarray,
+        color: Optional[str],
+        center: Optional[tuple[int, int]] = None,
     ) -> tuple[Optional[str], float]:
-        icon, det_color = _extract_icon(roi, color=color)
-        # Janela de busca 32x32 ao redor do centro (40, 40) -> tolera +/- 5 px de desalinhamento
+        icon, _ = _extract_icon(roi, color=color, center=center)
         search = icon[_SEARCH_BOX[0]:_SEARCH_BOX[1], _SEARCH_BOX[0]:_SEARCH_BOX[1]]
 
         scores: dict[str, float] = {}
@@ -260,7 +425,10 @@ class PieceClassifier:
         return best
 
     def classify(
-        self, roi: np.ndarray, color: Optional[str] = None
+        self,
+        roi: np.ndarray,
+        color: Optional[str] = None,
+        center: Optional[tuple[int, int]] = None,
     ) -> tuple[Optional[str], float]:
         """
         Returns ``(piece_type, confidence)``; ``(None, 0.0)`` when unsure.
@@ -269,11 +437,20 @@ class PieceClassifier:
         if None, all references are searched.
         """
         if self.has_samples:
-            return self._classify_samples(roi, color)
+            return self._classify_samples(roi, color, center=center)
         if not self.is_ready:
             return None, 0.0
 
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+        if center is None:
+            cx, cy, _, _ = locate_puck_center(gray)
+        else:
+            cx, cy = int(center[0]), int(center[1])
+
+        if gray.shape[0] == _SAMPLE_NORM and gray.shape[1] == _SAMPLE_NORM and (cx != 40 or cy != 40):
+            M = np.float32([[1.0, 0.0, float(40 - cx)], [0.0, 1.0, float(40 - cy)]])
+            gray = cv2.warpAffine(gray, M, (_SAMPLE_NORM, _SAMPLE_NORM), borderMode=cv2.BORDER_REPLICATE)
+
         gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(gray)
         roi_edges = _edge_map(gray)
 

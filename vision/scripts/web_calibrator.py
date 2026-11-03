@@ -620,9 +620,6 @@ class WebCalibratorApp:
         if cal is None:
             return {"success": False, "error": "Falta salvar a calibração."}
         ref_img = cv2.imread(str(REF_PATH)) if REF_PATH.is_file() else None
-        if ref_img is None:
-            return {"success": False,
-                    "error": "Sem referência! Tire as peças e clique em 'Gravar Tabuleiro Vazio'."}
 
         warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame())
         orientation = cal.board_orientation
@@ -643,8 +640,13 @@ class WebCalibratorApp:
                 continue
             found.append({"square": name, "color": a.color, "piece": a.piece})
             x0, y0 = square_display_pos(name, orientation)
+            cx, cy = getattr(a, "center", (40, 40))
+            if orientation == "flipped":
+                cx, cy = SQ - cx, SQ - cy
             box_color = (0, 255, 0) if a.piece else (0, 200, 255)
             cv2.rectangle(annotated, (x0 + 3, y0 + 3), (x0 + SQ - 3, y0 + SQ - 3), box_color, 3)
+            cv2.circle(annotated, (x0 + cx, y0 + cy), 17, (255, 220, 0), 1)
+            cv2.circle(annotated, (x0 + cx, y0 + cy), 2, (0, 255, 255), -1)
             tag = (a.color or "?")[0].upper() + (TYPE_LETTER.get(a.piece, "?"))
             cv2.rectangle(annotated, (x0 + 4, y0 + 4), (x0 + 38, y0 + 26), (0, 0, 0), -1)
             cv2.putText(annotated, tag, (x0 + 7, y0 + 22),

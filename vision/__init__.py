@@ -26,6 +26,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+import cv2
+
 from . import config as cfg
 from .camera         import CameraController
 from .calibration    import PerspectiveCalibrator, CalibrationData
@@ -64,13 +66,14 @@ class CameraSystem:
         # ── Components ─────────────────────────────────────────────────
         self._camera     = CameraController(device_index=device_index)
         self._diag       = DiagManager()
-        self._segmenter  = BoardSegmenter()
         self._comparator = StateComparator(min_confidence=cfg.MIN_CONFIDENCE)
 
         # Load calibration if available
+        orientation = "normal"
         if Path(cal_path).exists():
             try:
                 self._calibrator = PerspectiveCalibrator.load(cal_path)
+                orientation = self._calibrator.calibration.board_orientation
                 log.info("[CameraSystem] Calibration loaded from %s", cal_path)
             except Exception as exc:
                 log.warning(
@@ -85,8 +88,20 @@ class CameraSystem:
             )
             self._calibrator = PerspectiveCalibrator.default_uncalibrated()
 
-        # Detector starts without a reference image (set after initialize())
-        self._detector = PieceDetector()
+        self._segmenter = BoardSegmenter(board_orientation=orientation)
+
+        # Load saved empty-board reference image if available on disk
+        ref_img = None
+        ref_path = Path(getattr(cfg, "REFERENCE_EMPTY_FILE", cfg.VISION_DIR / "reference_empty.png"))
+        if ref_path.is_file():
+            ref_img = cv2.imread(str(ref_path))
+            if ref_img is not None:
+                log.info("[CameraSystem] Loaded empty-board reference from %s", ref_path)
+
+        self._detector = PieceDetector(
+            reference_image=ref_img,
+            board_orientation=orientation,
+        )
 
         # Validator wires everything
         self._validator = MoveValidator(
@@ -107,12 +122,12 @@ class CameraSystem:
 
     def initialize(self) -> bool:
         """
-        Open the camera, perform warmup, and capture the reference state.
+        Open the camera, perform warmup, and capture the initial board state.
 
         Returns
         -------
         bool
-            True if the camera opened and a reference state was captured.
+            True if the camera opened and an initial state was captured.
         """
         try:
             self._camera.open()
@@ -120,23 +135,23 @@ class CameraSystem:
             log.error("[CameraSystem] Initialization failed: %s", exc)
             return False
 
-        # Capture reference (empty board or current state)
-        log.info("[CameraSystem] Capturing reference state...")
+        # Capture current board state
+        log.info("[CameraSystem] Capturing initial board state...")
         ref_state = self._validator.capture_state("reference")
         if ref_state is not None:
             self._reference_state = ref_state
-            # Provide the reference image to the detector for MAD occupancy
-            # (We re-capture one raw frame for the reference image)
-            raw = self._camera.capture_with_retry(max_attempts=2)
-            if raw is not None:
-                corrected_ref = self._calibrator.correct_perspective(raw)
-                self._detector.set_reference(corrected_ref)
-                self._diag.save(corrected_ref, "reference_corrected")
-                log.info("[CameraSystem] Reference image set for piece detector.")
+            # Only overwrite detector reference image if no saved empty reference exists
+            if self._detector._ref is None:
+                raw = self._camera.capture_with_retry(max_attempts=2)
+                if raw is not None:
+                    corrected_ref = self._calibrator.correct_perspective(raw)
+                    self._detector.set_reference(corrected_ref)
+                    self._diag.save(corrected_ref, "reference_corrected")
+                    log.info("[CameraSystem] Live reference image set for piece detector.")
         else:
             log.warning(
-                "[CameraSystem] Could not capture reference state — "
-                "occupancy detection will use variance-only fallback."
+                "[CameraSystem] Could not capture initial state — "
+                "occupancy detection will use structural fallback if no reference exists."
             )
 
         self._initialised = True
