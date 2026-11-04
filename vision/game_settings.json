@@ -1,8 +1,8 @@
 {
-  "game_mode": "pvp",
-  "level": 4,
-  "white_control": "voice",
-  "black_control": "manual",
+  "game_mode": "pve",
+  "level": 3,
+  "white_control": "computer",
+  "black_control": "voice",
   "verify_gantry_moves": true,
   "diff_threshold": 0.12
 }
