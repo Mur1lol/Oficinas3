@@ -284,9 +284,13 @@ class MovePlanner:
 
     def _pickup(self, cell: tuple[int, int]) -> None:
         r, c = cell
+        x, y = self.cell_mm(cell)
+        # Garante que o Gantry esteja posicionado na casa com o eletroima DESLIGADO (0)
+        # antes de emitir o comando parado com eletroima LIGADO (1).
+        if not self._steps or self._steps[-1] != (x, y, 0):
+            self._emit(x, y, 0)
         self.logic.grid[r][c] = EMPTY
         self.carrying = True
-        x, y = self.cell_mm(cell)
         self._emit(x, y, 1)
 
     def _release(self, cell: tuple[int, int]) -> None:
@@ -385,9 +389,10 @@ class MovePlanner:
         self._snapshot = (self.board.copy(), dict(self.cem_occ), self.robot_phys, self.carrying)
         self._steps = []
 
-        if self.return_home:
-            self.robot_phys = self.home_phys()
-            self._emit(0.0, 0.0, 0)
+        # Na organizacao, o Gantry sempre parte de (0, 0) apos o Homing com o ima desligado
+        self.carrying = False
+        self.robot_phys = self.home_phys()
+        self._emit(0.0, 0.0, 0)
 
         # 1. Alvos de cada cor:
         # Pretas: Linha 0 (Rank 8) Nobres, Linha 1 (Rank 7) Peoes
@@ -604,7 +609,46 @@ class MovePlanner:
 
         self.carrying = False
         self._rebuild()
-        if self.return_home:
-            self._navigate_phys(self.home_phys())
+        self._navigate_phys(self.home_phys())
 
         return Plan(list(self._steps))
+
+    def plan_reorganize_batches(
+        self,
+        color: bool | None = None,
+        max_carries_per_batch: int = 2,
+    ) -> list[Plan]:
+        """
+        Divide a organizacao completa do tabuleiro em partes menores (lotes de ate
+        ``max_carries_per_batch`` pecas transportadas por comando).
+        Assim, cada parte leva ~20-40s e mantem comunicacao constante entre a
+        Raspberry Pi e o ESP32, evitando estourar o timeout de 3 minutos.
+        """
+        full_plan = self.plan_reorganize(color=color)
+        steps = full_plan.steps
+        if not steps:
+            return []
+
+        batches: list[Plan] = []
+        current_batch: list[tuple[float, float, int]] = []
+        carries_in_batch = 0
+
+        for i, step in enumerate(steps):
+            current_batch.append(step)
+            # Detecta o momento exato em que uma peca acabou de ser solta (ima 1 -> 0)
+            if i > 0 and steps[i - 1][2] == 1 and step[2] == 0:
+                carries_in_batch += 1
+                if carries_in_batch >= max_carries_per_batch:
+                    batches.append(Plan(list(current_batch)))
+                    current_batch = []
+                    carries_in_batch = 0
+
+        if current_batch:
+            # Se sobrou apenas o deslocamento final de volta ao (0, 0) sem carregar peca,
+            # anexa ao ultimo lote para evitar um comando extra de 1 passo
+            if batches and all(s[2] == 0 for s in current_batch):
+                batches[-1].steps.extend(current_batch)
+            else:
+                batches.append(Plan(list(current_batch)))
+
+        return batches

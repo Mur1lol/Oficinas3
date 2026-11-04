@@ -147,3 +147,32 @@ def test_reorganize_prioritizes_non_pawns_before_pawns(monkeypatch):
     assert max(noble_indices) < min(pawn_indices)
 
 
+def test_reorganize_with_no_return_home_never_starts_with_magnet_on():
+    # Reproduce the exact scenario where --no-return-home left robot_phys on the last moved piece
+    planner = MovePlanner(return_home=False)
+    moves = ["e2e4", "d7d5", "g1f3", "c8g4", "f1c4", "g4d7"]
+    for m in moves:
+        planner.plan(chess.Move.from_uci(m))
+
+    batches = planner.plan_reorganize_batches(max_carries_per_batch=2)
+    assert len(batches) >= 2
+
+    # First batch must start at (0.0, 0.0) with magnet OFF (0)
+    assert batches[0].steps[0] == (0.0, 0.0, 0)
+
+    for b_idx, batch in enumerate(batches):
+        assert len(batch.steps) > 0
+        # Every batch must start and end with magnet OFF (0)
+        assert batch.steps[0][2] == 0, f"Batch {b_idx} started with magnet ON: {batch.steps[0]}"
+        assert batch.steps[-1][2] == 0, f"Batch {b_idx} ended with magnet ON: {batch.steps[-1]}"
+
+        # Every pickup (0 -> 1 transition) must happen at the same (x, y) as the preceding ima=0 step
+        for i in range(1, len(batch.steps)):
+            prev_x, prev_y, prev_ima = batch.steps[i - 1]
+            curr_x, curr_y, curr_ima = batch.steps[i]
+            if prev_ima == 0 and curr_ima == 1:
+                assert (prev_x, prev_y) == (curr_x, curr_y), (
+                    f"Magnet turned ON while moving from ({prev_x},{prev_y}) to ({curr_x},{curr_y})"
+                )
+
+

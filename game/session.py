@@ -586,6 +586,8 @@ class VoiceChessGame:
                 self._gantry_connected = True
             self.lcd.show("HOMING", "PLEASE WAIT")
             self.gantry.home()
+            self.planner.robot_phys = self.planner.home_phys()
+            self.planner.carrying = False
         except GantryError as exc:
             self._gantry_connected = False
             self.leds.blink(PLAYER, "red")
@@ -1011,15 +1013,28 @@ class VoiceChessGame:
             self.leds.off(in_check_side)
 
     def _organize_board(self) -> None:
-        """Organiza as pecas de ambos os jogadores de volta as casas iniciais."""
+        """
+        Organiza as pecas de ambos os jogadores de volta as casas iniciais,
+        dividindo em partes (lotes de ate 2 pecas por envio) para manter a
+        comunicacao ativa entre a Raspberry Pi e o ESP32 sem estourar o timeout.
+        """
         self.lcd.show("ORGANIZING BOARD", "PLEASE WAIT...", "RESETTING ALL", "PIECES...")
         self.speaker.say("Organizing board. Please wait.", wait=False)
         try:
             self._connect_gantry()
-            plan = self.planner.plan_reorganize()
+            batches = self.planner.plan_reorganize_batches(max_carries_per_batch=2)
             self.leds.set(PLAYER, "green")
             self.leds.set(COMPUTER, "green")
-            self.gantry.execute(plan.x, plan.y, plan.eletroima)
+            total = len(batches)
+            for idx, batch in enumerate(batches, start=1):
+                if total > 1:
+                    self.lcd.show(
+                        "ORGANIZING BOARD",
+                        f"PART {idx} OF {total}",
+                        "PLEASE WAIT...",
+                        "",
+                    )
+                self.gantry.execute(batch.x, batch.y, batch.eletroima)
             self.leds.off()
             self.lcd.show("BOARD ORGANIZED", "ALL PIECES READY", "SAY: MAGNUS", "START NEW GAME")
             self.speaker.say("Board organized.", wait=True)
