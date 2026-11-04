@@ -633,11 +633,11 @@ class VoiceChessGame:
                 "WHITE MOVES FIRST",
                 "",
             )
-            self.speaker.say("Player versus Player game started. White moves first.")
+            self.speaker.say("Player versus Player game started.", wait=True)
         else:
             you_color = "BLACK" if self.player_color == chess.BLACK else "WHITE"
             self.lcd.show("GAME STARTED", f"YOU: {you_color}")
-            self.speaker.say(f"Game started. You play {you_color.lower()}.")
+            self.speaker.say(f"Game started. You play {you_color.lower()}.", wait=True)
 
         save_logical_board_snapshot(self.planner.board, status_text=f"Em jogo ({self.game_mode.upper()})")
 
@@ -649,6 +649,8 @@ class VoiceChessGame:
             control = self._control_for(turn_color)
 
             if control == "computer":
+                turn_label = "White" if turn_color == chess.WHITE else "Black"
+                self.speaker.say(f"{turn_label}'s turn.", wait=True)
                 move = self._computer_move()
                 self._execute(move, side_led)
             elif control == "manual":
@@ -758,6 +760,14 @@ class VoiceChessGame:
         self._set_allowed_commands(self._is_active_game_command)
         side_led = self._side_led(turn_color)
         color_name = "WHITE" if turn_color == chess.WHITE else "BLACK"
+        turn_label = "White" if turn_color == chess.WHITE else "Black"
+        self.lcd.show(
+            f"{color_name} TURN",
+            "SAY: MAGNUS MOVE",
+            "OR MAGNUS VALIDATE",
+            "",
+        )
+        self.speaker.say(f"{turn_label}'s turn.", wait=True)
         while True:
             self.lcd.show(
                 f"{color_name} TURN",
@@ -837,6 +847,14 @@ class VoiceChessGame:
         self._set_allowed_commands(self._is_active_game_command)
         side_led = self._side_led(turn_color)
         color_name = "WHITE" if turn_color == chess.WHITE else "BLACK"
+        turn_label = "White" if turn_color == chess.WHITE else "Black"
+        self.lcd.show(
+            f"{color_name} TURN",
+            "SAY: MAGNUS MOVE",
+            "OR MAGNUS VALIDATE",
+            "",
+        )
+        self.speaker.say(f"{turn_label}'s turn.", wait=True)
         while True:
             self.lcd.show(
                 f"{color_name} TURN",

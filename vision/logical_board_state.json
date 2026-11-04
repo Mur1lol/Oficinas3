@@ -1,10 +1,10 @@
 {
-  "fen": "3r2nr/p4ppp/8/1B1p4/k2N4/5P2/PPPB2PP/R2K3R b - - 0 21",
+  "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
   "turn": "black",
-  "fullmove_number": 21,
-  "is_check": true,
-  "is_game_over": true,
+  "fullmove_number": 1,
+  "is_check": false,
+  "is_game_over": false,
   "last_move_uci": null,
   "status_text": "IDLE - Aguardando in\u00edcio",
-  "updated_at": "16:17:59"
+  "updated_at": "21:37:41"
 }
