@@ -93,7 +93,17 @@ def locate_puck_center(gray: np.ndarray) -> tuple[int, int, float, float]:
         3D puck + icon presence (empty squares < 2500, occupied > 10000), and
         ``icon_std`` (local std inside r <= 8.5 around ``(cx, cy)``).
     """
-    g = _to_gray80(gray)
+    # Percentile-normalize the square ROI before structural scoring so that
+    # dim rooms (0.5x brightness) and bright spotlights (1.35x brightness)
+    # produce identical gradient and moat-std scales.
+    g_raw = _to_gray80(gray)
+    p5, p95 = np.percentile(g_raw, (5, 95))
+    span = max(25.0, float(p95 - p5))
+    g_norm = np.clip((g_raw - p5) * (220.0 / span) + 18.0, 0.0, 255.0).astype(np.float32)
+    g_eq = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(4, 4)).apply(
+        g_norm.astype(np.uint8)
+    ).astype(np.float32)
+    g = 0.65 * g_norm + 0.35 * g_eq
     g2 = g * g
     gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
@@ -102,8 +112,9 @@ def locate_puck_center(gray: np.ndarray) -> tuple[int, int, float, float]:
     m_icon = cv2.filter2D(g, cv2.CV_32F, _K_ICON)
     std_icon = np.sqrt(np.maximum(0.0, cv2.filter2D(g2, cv2.CV_32F, _K_ICON) - m_icon * m_icon))
 
-    m_moat = cv2.filter2D(g, cv2.CV_32F, _K_MOAT)
-    std_moat = np.sqrt(np.maximum(0.0, cv2.filter2D(g2, cv2.CV_32F, _K_MOAT) - m_moat * m_moat))
+    g_norm2 = g_norm * g_norm
+    m_moat = cv2.filter2D(g_norm, cv2.CV_32F, _K_MOAT)
+    std_moat = np.sqrt(np.maximum(0.0, cv2.filter2D(g_norm2, cv2.CV_32F, _K_MOAT) - m_moat * m_moat))
 
     r_icon = cv2.filter2D(grad, cv2.CV_32F, _K_ICON)
     r_moat = cv2.filter2D(grad, cv2.CV_32F, _K_MOAT)
@@ -120,7 +131,7 @@ def locate_puck_center(gray: np.ndarray) -> tuple[int, int, float, float]:
     ) ** 0.25
 
     s_inner = np.maximum(0.0, r_icon - 0.7 * r_moat) * (
-        std_icon * 20.0 / ((std_moat + 6.0) ** 2)
+        std_icon * 20.0 / ((std_moat + 5.0) ** 2)
     )
     resp = s_inner * r_rim_sym
 

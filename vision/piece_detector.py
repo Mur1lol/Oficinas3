@@ -348,13 +348,16 @@ class PieceDetector:
             disk = d <= 16.5
             mad = float(np.mean(np.abs(aligned[disk] - ref_gray[disk]))) / 255.0
 
-            # Structural gate prevents sharp shadows on empty squares from triggering occupancy
+            # Structural gate prevents sharp shadows on empty squares from triggering occupancy,
+            # while strong 3D puck structure confirms occupancy even when lighting changes
+            # make a piece's brightness match the old reference (e.g. moving the board to a new room).
             has_structure = (
                 puck_score >= self._struct_thresh * 0.55
                 or icon_std >= 12.0
                 or mad >= self._diff_thresh * 1.85
             )
-            occupied = (mad >= self._diff_thresh) and has_structure
+            strong_puck = puck_score >= self._struct_thresh * 2.5
+            occupied = ((mad >= self._diff_thresh) and has_structure) or strong_puck
 
             if occupied:
                 mad_conf = min(1.0, mad / (self._diff_thresh * 2.5))

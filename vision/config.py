@@ -98,7 +98,7 @@ OCCUPIED_VARIANCE_THRESHOLD: float = 180.0
 
 # Minimum 4-quadrant concentric puck structural score (icon contrast + moat
 # uniformity + 360-deg rim edge) to confirm a physical puck without reference.
-PUCK_STRUCTURAL_SCORE_THRESHOLD: float = 5500.0
+PUCK_STRUCTURAL_SCORE_THRESHOLD: float = 3500.0
 
 # ---------------------------------------------------------------------------
 # Color detection
