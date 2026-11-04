@@ -25,6 +25,7 @@ class Gantry {
   static constexpr float RECUO_HOME_X = 0.0f;    // Recuo pós-homing no eixo X (mm)
   static constexpr float RECUO_HOME_Y = 0.0f;   // Recuo pós-homing no eixo Y (mm)
   static constexpr uint32_t PAUSA_TROCA_EIXO_MS = 500; // Pausa (ms) ao trocar de eixo com o eletroímã ligado
+  static constexpr uint32_t PAUSA_ELETROIMA_MS   = 500; // Pausa (ms) antes de ligar e desligar o eletroímã
 
   Gantry(uint8_t aStep = 26, uint8_t aDir = 27,
          uint8_t bStep = 18, uint8_t bDir = 19,
@@ -213,11 +214,21 @@ class Gantry {
     bool hasCarryMov = false;
 
     for (size_t i = 0; i < tamanho; i++) {
-      // Ajusta o eletroímã para o passo atual
-      if (ima[i] > 0) {
-        eletroima_.ligar(100);
-      } else {
-        eletroima_.desligar();
+      // Ajusta o eletroímã para o passo atual com pausa antes e após alternar
+      bool novoIma = (ima[i] > 0);
+      bool mudouIma = (novoIma != eletroima_.estaLigado());
+      if (mudouIma) {
+        if (PAUSA_ELETROIMA_MS > 0) {
+          delay(PAUSA_ELETROIMA_MS);
+        }
+        if (novoIma) {
+          eletroima_.ligar(100);
+        } else {
+          eletroima_.desligar();
+        }
+        if (PAUSA_ELETROIMA_MS > 0) {
+          delay(PAUSA_ELETROIMA_MS);
+        }
       }
 
       float dx = x[i] - posX();

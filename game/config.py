@@ -35,6 +35,9 @@ RELEASE_OVERSHOOT_MM = 3.0
 # Pausa (em segundos) em cada troca de eixo com o eletroima ligado para a peca nao se soltar por inercia
 AXIS_CHANGE_DELAY_S = 0.5
 
+# Pausa (em segundos) antes e apos ligar/desligar o eletroima no ESP32
+ELECTROMAGNET_DELAY_S = 0.5
+
 
 def game_to_gantry(x: float, y: float) -> tuple[float, float]:
     """Coordenada em mm do planner -> coordenada absoluta do ESP32 (mm).
