@@ -312,9 +312,17 @@ def verify_board_position(
             sq_list = ", ".join(m["square"] for m in non_move_mismatches[:5])
             issues.append(f"divergência em {sq_list}")
         msg = "Divergência na verificação: " + "; ".join(issues) + "."
-        speech = "Warning. Board position mismatch detected. Please check the pieces."
+        speech = (
+            "Warning. Board position mismatch detected. "
+            "Please adjust the pieces and say Magnus Validate to check again."
+        )
         bad_sq = mismatches[0]["square"] if mismatches else "BOARD"
-        lcd = ("CAMERA WARNING!", f"CHECK SQUARE {bad_sq}", f"MATCH: {matching_squares}/64", "CHECK PIECES")
+        lcd = (
+            "CAMERA WARNING!",
+            f"CHECK SQUARE {bad_sq}",
+            f"MATCH: {matching_squares}/64",
+            "SAY: MAGNUS VALIDATE",
+        )
 
     return PositionVerificationResult(
         success=success,

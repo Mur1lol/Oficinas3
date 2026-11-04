@@ -981,20 +981,51 @@ class VoiceChessGame:
             raise GameAbort(f"Gantry: {exc}") from exc
         self.leds.off(side)
 
-        # Verificacao visual pos-movimento do Gantry (Modo PvE e lances Gantry em PvP)
+        # Verificacao visual pos-movimento do Gantry (Modo PvE e lances Gantry em PvP):
+        # So permite avancar o turno quando a camera confirmar que o movimento aconteceu!
         if self.camera is not None and self.camera.is_ready and self.verify_gantry_moves:
-            self.lcd.show("CAMERA CHECKING", "BOARD POSITION...", "PLEASE WAIT", "")
-            ver = self.camera.verify_gantry_position(self.planner.board, last_move=move)
-            if ver.success:
-                self.lcd.show(*ver.lcd_lines)
-                log.info("[Vision] %s", ver.message)
-            else:
+            self._set_allowed_commands(
+                lambda cmd: isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE"
+            )
+            while True:
+                self.lcd.show("CAMERA CHECKING", "BOARD POSITION...", "PLEASE WAIT", "")
+                ver = self.camera.verify_gantry_position(self.planner.board, last_move=move)
+                if ver.success:
+                    self.leds.set(side, "green")
+                    self.lcd.show(*ver.lcd_lines)
+                    log.info("[Vision] %s", ver.message)
+                    time.sleep(0.8)
+                    self.leds.off(side)
+                    break
+
                 log.warning("[Vision] %s", ver.message)
                 self.lcd.show(*ver.lcd_lines)
                 if ver.speech:
                     self.speaker.say(ver.speech, wait=False)
-                self.leds.blink(side, "yellow", 2.0)
+                self.leds.blink(side, "red", cfg.BLINK_ERROR_SECONDS)
                 self.speaker.wait_idle()
+
+                # Aguarda o jogador ajustar a peca e dizer MAGNUS VALIDATE para re-checar
+                while True:
+                    result = self.listener.listen()
+                    if result.command is not None and not self._is_command_allowed(result.command):
+                        self._command_not_recognized(side=side)
+                        self.lcd.show(*ver.lcd_lines)
+                        continue
+                    if result.wake_detected and not result.command:
+                        self._command_not_recognized(side=side)
+                        self.lcd.show(*ver.lcd_lines)
+                        continue
+                    if not result.confirmed:
+                        continue
+                    cmd = result.command
+                    if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
+                        break
+                    self.lcd.show(*ver.lcd_lines)
+                    self.speaker.say(
+                        "Please check the pieces on the board and say Magnus Validate.",
+                        wait=True,
+                    )
 
         self._check_alert_after_move()
 
