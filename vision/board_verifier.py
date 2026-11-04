@@ -677,8 +677,11 @@ def annotate_validation_image(
 # Validation History & Logical Board Persistence (for Web UI live monitoring)
 # ---------------------------------------------------------------------------
 
-def record_validation_event(event: dict, max_entries: int = 30) -> None:
-    """Append a validation event to ``vision/validation_history.json``."""
+def record_validation_event(event: dict, max_entries: int = 2) -> None:
+    """
+    Save validation event to ``vision/validation_history.json``, keeping only
+    the latest event and the most recent OK event (at most 2 entries).
+    """
     entry = {
         "timestamp": time.strftime("%H:%M:%S"),
         "epoch_ms": int(time.time() * 1000),
@@ -693,11 +696,19 @@ def record_validation_event(event: dict, max_entries: int = 30) -> None:
                     history = loaded
         except Exception:
             history = []
-    history.insert(0, entry)
-    history = history[:max_entries]
+
+    is_entry_ok = bool(entry.get("valid") or entry.get("success"))
+    if is_entry_ok:
+        # New entry is itself OK, so keep only this latest OK entry
+        new_history = [entry]
+    else:
+        # Keep the new (failed) capture + the most recent OK capture if one existed
+        last_ok = next((item for item in history if item.get("valid") or item.get("success")), None)
+        new_history = [entry, last_ok] if last_ok is not None else [entry]
+
     try:
         with open(VALIDATION_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2)
+            json.dump(new_history[:max_entries], f, indent=2)
     except Exception as exc:
         log.debug("[BoardVerifier] Could not write validation history: %s", exc)
 

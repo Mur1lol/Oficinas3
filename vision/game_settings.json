@@ -1,8 +1,0 @@
-{
-  "game_mode": "pve",
-  "level": 3,
-  "white_control": "computer",
-  "black_control": "voice",
-  "verify_gantry_moves": true,
-  "diff_threshold": 0.12
-}

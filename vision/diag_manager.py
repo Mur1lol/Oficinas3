@@ -30,17 +30,14 @@ log = logging.getLogger(__name__)
 
 class DiagManager:
     """
-    Saves annotated images to *diag_dir* for offline inspection.
-
-    Parameters
-    ----------
-    diag_dir : str | Path
-        Directory where diagnostic images are written.
-    enabled : bool
-        If False, all save calls are no-ops.
-    max_files : int
-        Maximum number of .jpg files to keep; oldest are deleted when exceeded.
+    Saves diagnostic images to *diag_dir*, keeping only:
+      - ``last_capture.jpg``: the most recent photo captured/analyzed.
+      - ``last_ok.jpg``     : the most recent photo where validation/position was OK.
+    Any other ``.jpg`` files in *diag_dir* are automatically cleaned up.
     """
+
+    LAST_CAPTURE_NAME = "last_capture.jpg"
+    LAST_OK_NAME      = "last_ok.jpg"
 
     def __init__(
         self,
@@ -54,45 +51,41 @@ class DiagManager:
 
         if self._enabled:
             self._dir.mkdir(parents=True, exist_ok=True)
-            log.info("[Diag] Diagnostic images → %s", self._dir)
+            self._cleanup_extra_files()
+            log.info("[Diag] Diagnostic images → %s (keeping only last_capture.jpg & last_ok.jpg)", self._dir)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def save(self, image: np.ndarray, label: str) -> Path | None:
+    def save(self, image: np.ndarray, label: str = "capture", *, is_ok: bool = False) -> Path | None:
         """
-        Save *image* as a JPEG with a timestamped filename.
-
-        Parameters
-        ----------
-        image : np.ndarray
-            BGR image to save.
-        label : str
-            Short tag appended to the filename, e.g. "raw", "corrected",
-            "after_move".
-
-        Returns
-        -------
-        Path | None
-            The saved file path, or None if saving is disabled.
+        Save *image* as ``last_capture.jpg`` (and also as ``last_ok.jpg`` when
+        *is_ok* is True), removing any old diagnostic ``.jpg`` files.
         """
         if not self._enabled:
             return None
 
-        ts   = time.strftime("%Y%m%d_%H%M%S")
-        name = f"{ts}_{label}.jpg"
-        path = self._dir / name
-
-        ok = cv2.imwrite(str(path), image)
-        if ok:
-            log.debug("[Diag] Saved: %s", path.name)
-            self._rotate()
-        else:
-            log.warning("[Diag] Failed to save: %s", path.name)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        capture_path = self._dir / self.LAST_CAPTURE_NAME
+        ok = cv2.imwrite(str(capture_path), image)
+        if not ok:
+            log.warning("[Diag] Failed to save: %s", capture_path.name)
             return None
 
-        return path
+        if is_ok:
+            ok_path = self._dir / self.LAST_OK_NAME
+            cv2.imwrite(str(ok_path), image)
+            log.debug("[Diag] Updated %s and %s (%s)", capture_path.name, ok_path.name, label)
+        else:
+            log.debug("[Diag] Updated %s (%s)", capture_path.name, label)
+
+        self._cleanup_extra_files()
+        return capture_path
+
+    def save_ok(self, image: np.ndarray, label: str = "ok") -> Path | None:
+        """Save *image* as both ``last_capture.jpg`` and ``last_ok.jpg``."""
+        return self.save(image, label=label, is_ok=True)
 
     def save_squares(
         self,
@@ -101,13 +94,6 @@ class DiagManager:
     ) -> Path | None:
         """
         Create a contact sheet of all 64 square ROIs and save it.
-
-        Parameters
-        ----------
-        squares : dict[str, np.ndarray]
-            From BoardSegmenter.segment_board().
-        label : str
-            Filename tag.
         """
         if not self._enabled:
             return None
@@ -123,7 +109,6 @@ class DiagManager:
                 roi = squares.get(sq)
                 if roi is None:
                     roi = np.zeros((80, 80, 3), dtype=np.uint8)
-                # Add label overlay
                 annotated = roi.copy()
                 cv2.putText(annotated, sq, (2, 12),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
@@ -143,13 +128,15 @@ class DiagManager:
     # Internal
     # ------------------------------------------------------------------
 
-    def _rotate(self) -> None:
-        """Delete oldest files if the file count exceeds the limit."""
-        files = self.list_files()
-        while len(files) > self._max:
-            oldest = files.pop(0)
-            try:
-                oldest.unlink()
-                log.debug("[Diag] Rotated out: %s", oldest.name)
-            except OSError as exc:
-                log.warning("[Diag] Could not delete %s: %s", oldest.name, exc)
+    def _cleanup_extra_files(self) -> None:
+        """Remove any .jpg file in diag_dir except last_capture.jpg and last_ok.jpg."""
+        if not self._dir.exists():
+            return
+        keep = {self.LAST_CAPTURE_NAME, self.LAST_OK_NAME}
+        for p in self._dir.glob("*.jpg"):
+            if p.name not in keep:
+                try:
+                    p.unlink()
+                    log.debug("[Diag] Removed old file: %s", p.name)
+                except OSError as exc:
+                    log.warning("[Diag] Could not delete %s: %s", p.name, exc)

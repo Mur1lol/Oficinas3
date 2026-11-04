@@ -12,3 +12,6 @@ voice/models/*.onnx
 voice/models/*.onnx.json
 voice.local.toml
 vision/diags/
+vision/game_settings.json
+vision/logical_board_state.json
+vision/validation_history.json

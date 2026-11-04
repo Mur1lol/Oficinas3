@@ -266,7 +266,11 @@ class CameraSystem:
         res = verify_board_position(board, state, last_move=last_move)
         orientation = self._calibrator.calibration.board_orientation
         annotated = annotate_validation_image(warped, state, orientation=orientation, verify_result=res)
-        self._diag.save(annotated, "post_gantry_verified")
+        self._diag.save(
+            annotated,
+            "post_gantry_verified",
+            is_ok=bool(res.success and len(res.mismatches) == 0),
+        )
 
         thumb_b64 = None
         ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
@@ -312,7 +316,7 @@ class CameraSystem:
         res = detect_and_validate_manual_move(board, state, is_phys_valid_fn=is_phys_valid_fn)
         orientation = self._calibrator.calibration.board_orientation
         annotated = annotate_validation_image(warped, state, orientation=orientation, manual_result=res)
-        self._diag.save(annotated, "manual_validate_annotated")
+        self._diag.save(annotated, "manual_validate_annotated", is_ok=bool(res.valid))
 
         thumb_b64 = None
         ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
