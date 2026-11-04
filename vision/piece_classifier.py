@@ -119,7 +119,9 @@ def locate_puck_center(gray: np.ndarray) -> tuple[int, int, float, float]:
         * np.maximum(1.0, r_E)
     ) ** 0.25
 
-    s_inner = np.maximum(0.0, r_icon - 0.7 * r_moat) * (std_icon / (std_moat + 12.0))
+    s_inner = np.maximum(0.0, r_icon - 0.7 * r_moat) * (
+        std_icon * 20.0 / ((std_moat + 6.0) ** 2)
+    )
     resp = s_inner * r_rim_sym
 
     sub = resp[14:67, 14:67]
