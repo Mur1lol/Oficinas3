@@ -983,9 +983,11 @@ class VoiceChessGame:
 
         # Verificacao visual pos-movimento do Gantry (Modo PvE e lances Gantry em PvP):
         # So permite avancar o turno quando a camera confirmar que o movimento aconteceu!
+        # Caso haja divergencia (ex.: peca escapou do ima), aceita MAGNUS VALIDATE ou MAGNUS REPEAT.
         if self.camera is not None and self.camera.is_ready and self.verify_gantry_moves:
             self._set_allowed_commands(
-                lambda cmd: isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE"
+                lambda cmd: isinstance(cmd, ActionCommand)
+                and cmd.action in ("VALIDATE_MOVE", "REPEAT_MOVE")
             )
             while True:
                 self.lcd.show("CAMERA CHECKING", "BOARD POSITION...", "PLEASE WAIT", "")
@@ -1005,7 +1007,8 @@ class VoiceChessGame:
                 self.leds.blink(side, "red", cfg.BLINK_ERROR_SECONDS)
                 self.speaker.wait_idle()
 
-                # Aguarda o jogador ajustar a peca e dizer MAGNUS VALIDATE para re-checar
+                # Aguarda o jogador dizer MAGNUS VALIDATE (apos ajustar na mao)
+                # ou MAGNUS REPEAT (para repetir o ultimo comando do Gantry)
                 while True:
                     result = self.listener.listen()
                     if result.command is not None and not self._is_command_allowed(result.command):
@@ -1021,9 +1024,22 @@ class VoiceChessGame:
                     cmd = result.command
                     if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
                         break
+                    if isinstance(cmd, ActionCommand) and cmd.action == "REPEAT_MOVE":
+                        self.lcd.show(*lines)
+                        self.speaker.say("Repeating last gantry move.", wait=False)
+                        self.leds.set(side, "green")
+                        try:
+                            self.gantry.execute(plan.x, plan.y, plan.eletroima)
+                        except GantryError as exc:
+                            self.planner.rollback()
+                            self.leds.off(side)
+                            self.leds.blink(side, "red", cfg.BLINK_ERROR_SECONDS)
+                            raise GameAbort(f"Gantry: {exc}") from exc
+                        self.leds.off(side)
+                        break
                     self.lcd.show(*ver.lcd_lines)
                     self.speaker.say(
-                        "Please check the pieces on the board and say Magnus Validate.",
+                        "Please say Magnus Repeat to repeat the gantry move, or Magnus Validate after adjusting the piece.",
                         wait=True,
                     )
 

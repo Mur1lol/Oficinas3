@@ -97,6 +97,14 @@ ACTIONS = {
         "verify move",
         "verify",
     ),
+    "REPEAT_MOVE": (
+        "repeat",
+        "repeat move",
+        "repeat last move",
+        "try again",
+        "redo",
+        "redo move",
+    ),
     "MODE_PVP": (
         "option 1",
         "option one",
@@ -155,6 +163,7 @@ ACTIONS = {
 # IMMEDIATE_ACTIONS = {"VALIDATE_MOVE"}
 IMMEDIATE_ACTIONS = {
     "VALIDATE_MOVE",
+    "REPEAT_MOVE",
     "NEW_GAME",
     "MODE_PVP",
     "MODE_PVE",

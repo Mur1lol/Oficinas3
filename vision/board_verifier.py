@@ -314,14 +314,14 @@ def verify_board_position(
         msg = "Divergência na verificação: " + "; ".join(issues) + "."
         speech = (
             "Warning. Board position mismatch detected. "
-            "Please adjust the pieces and say Magnus Validate to check again."
+            "Say Magnus Repeat to repeat the gantry move, or adjust the piece and say Magnus Validate."
         )
         bad_sq = mismatches[0]["square"] if mismatches else "BOARD"
         lcd = (
             "CAMERA WARNING!",
             f"CHECK SQUARE {bad_sq}",
-            f"MATCH: {matching_squares}/64",
             "SAY: MAGNUS VALIDATE",
+            "OR MAGNUS REPEAT",
         )
 
     return PositionVerificationResult(
