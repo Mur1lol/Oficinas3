@@ -267,10 +267,12 @@ class MovePlanner:
                 p_prev = pts[i - 1]
                 dx = x - p_prev[0]
                 dy = y - p_prev[1]
-                if abs(dx) > 0:
+                # Nao aplica overshoot quando o movimento aproxima a peca de X=0 ou Y=0,
+                # evitando acionar os sensores de fim de curso (homing) em 0.0 mm.
+                if abs(dx) > 0 and x > 0.0:
                     dir_x = 1.0 if dx > 0 else -1.0
                     x = max(0.0, min(cfg.GANTRY_SIZE_MM[0], x + dir_x * self.overshoot_mm))
-                elif abs(dy) > 0:
+                elif abs(dy) > 0 and y > 0.0:
                     dir_y = 1.0 if dy > 0 else -1.0
                     y = max(0.0, min(cfg.GANTRY_SIZE_MM[1], y + dir_y * self.overshoot_mm))
                 x = round(x, 2)

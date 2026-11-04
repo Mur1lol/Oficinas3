@@ -90,60 +90,62 @@ def find_path(
     start = board8.to_physical(or_r, or_c)
     goal  = board8.to_physical(ds_r, ds_c)
 
-    # A* no grid 17x17
-    # f(n) = g(n) + h(n)
-    #   g = custo real acumulado (numero de passos)
-    #   h = heuristica de Manhattan ate o objetivo (admissivel e consistente)
-
+    # A* no grid 17x17 (com estado de direcao para minimizar trocas de eixo)
     def h(a: tuple) -> int:
         return abs(a[0] - goal[0]) + abs(a[1] - goal[1])
 
-    # heap: (f, g, celula)
-    heap    = [(h(start), 0, start)]
-    came_from = {start: None}   # celula -> celula anterior
-    g_cost    = {start: 0}      # custo real ate cada celula
+    TURN_PENALTY = 6.0
+    start_state = (start[0], start[1], -1)
+    heap      = [(float(h(start)), 0.0, 0, start_state)]
+    came_from = {start_state: None}
+    g_cost    = {start_state: 0.0}
 
+    goal_state = None
     while heap:
-        f, g, cur = heapq.heappop(heap)
+        f, g, turns, cur_state = heapq.heappop(heap)
+        cur_r, cur_c, pdir = cur_state
 
-        if cur == goal:
+        if (cur_r, cur_c) == goal:
+            goal_state = cur_state
             break
 
-        # Celula ja processada com custo menor (entrada obsoleta no heap)
-        if g > g_cost.get(cur, float('inf')):
+        if g > g_cost.get(cur_state, float('inf')):
             continue
 
-        cur_r, cur_c = cur
-        for dr, dc in _DIRS:
+        for d_idx, (dr, dc) in enumerate(_DIRS):
             nr, nc = cur_r + dr, cur_c + dc
             nxt = (nr, nc)
+            is_turn = (pdir != -1 and d_idx != pdir)
+            turn_cost = TURN_PENALTY if is_turn else 0.0
+            new_turns = turns + (1 if is_turn else 0)
+            nxt_state = (nr, nc, d_idx)
 
             # Celula destino: entrada permitida (sabemos que esta vazia)
             if nxt == goal:
-                new_g = g + 1
-                if new_g < g_cost.get(nxt, float('inf')):
-                    g_cost[nxt]    = new_g
-                    came_from[nxt] = cur
-                    heapq.heappush(heap, (new_g + 0, new_g, nxt))  # h(goal)=0
+                new_g = g + 1.0 + turn_cost
+                if new_g < g_cost.get(nxt_state, float('inf')):
+                    g_cost[nxt_state]    = new_g
+                    came_from[nxt_state] = cur_state
+                    heapq.heappush(heap, (new_g, new_g, new_turns, nxt_state))
                 continue
 
             if not board17.is_passable(nr, nc):
                 continue
 
-            new_g = g + 1
-            if new_g < g_cost.get(nxt, float('inf')):
-                g_cost[nxt]    = new_g
-                came_from[nxt] = cur
-                heapq.heappush(heap, (new_g + h(nxt), new_g, nxt))
+            new_g = g + 1.0 + turn_cost
+            if new_g < g_cost.get(nxt_state, float('inf')):
+                g_cost[nxt_state]    = new_g
+                came_from[nxt_state] = cur_state
+                heapq.heappush(heap, (new_g + h(nxt), new_g, new_turns, nxt_state))
 
-    if goal not in came_from:
+    if goal_state is None:
         return None  # Caminho inexistente
 
     # Reconstroi o caminho
     path = []
-    cur = goal
+    cur = goal_state
     while cur is not None:
-        path.append(cur)
+        path.append((cur[0], cur[1]))
         cur = came_from[cur]
     path.reverse()
 
@@ -168,7 +170,7 @@ def find_path_physical(
     start_phys: tuple[int, int],
     goal_phys: tuple[int, int],
 ) -> dict | None:
-    """Calcula o caminho no grid fisico 17x33 entre quaisquer duas coordenadas fisicas (pr, pc)."""
+    """Calcula o caminho no grid fisico 15x27 entre quaisquer duas coordenadas fisicas (pr, pc)."""
     from board import BoardPhysical, PHYS_ROWS, PHYS_COLS
 
     sr, sc = start_phys
@@ -189,57 +191,67 @@ def find_path_physical(
     def h(a):
         return abs(a[0] - goal[0]) + abs(a[1] - goal[1])
 
-    heap = [(h(start), 0, start)]
-    came_from = {start: None}
-    g_cost = {start: 0}
+    # Estado no grafo A*: (row, col, dir_idx) onde dir_idx in {-1, 0, 1, 2, 3}.
+    # Incluir a direcao de chegada no estado permite ao A* encontrar o caminho com
+    # o MENOR numero de mudancas de eixo (ex.: X -> Y -> X em 3 retas no Roque,
+    # em vez de Y -> X -> Y -> X em 4 retas).
+    start_state = (start[0], start[1], -1)
+    heap = [(float(h(start)), 0.0, 0, start_state)]
+    came_from = {start_state: None}
+    g_cost = {start_state: 0.0}
 
     ADJACENT_PENALTY = 3.0
-    TURN_PENALTY = 1.0
+    TURN_PENALTY = 6.0
 
+    goal_state = None
     while heap:
-        f, g, cur = heapq.heappop(heap)
-        if cur == goal:
+        f, g, turns, cur_state = heapq.heappop(heap)
+        cr, cc, pdir = cur_state
+        if (cr, cc) == goal:
+            goal_state = cur_state
             break
-        if g > g_cost.get(cur, float("inf")):
+        if g > g_cost.get(cur_state, float("inf")):
             continue
-        cr, cc = cur
-        parent = came_from[cur]
-        prev_dir = (cr - parent[0], cc - parent[1]) if parent is not None else None
 
-        for dr, dc in _DIRS:
-            nxt = (cr + dr, cc + dc)
-            nr, nc = nxt
+        for d_idx, (dr, dc) in enumerate(_DIRS):
+            nr, nc = cr + dr, cc + dc
             if not (0 <= nr < PHYS_ROWS and 0 <= nc < PHYS_COLS):
                 continue
-            turn_cost = TURN_PENALTY if (prev_dir is not None and (dr, dc) != prev_dir) else 0.0
+            is_turn = (pdir != -1 and d_idx != pdir)
+            turn_cost = TURN_PENALTY if is_turn else 0.0
+            new_turns = turns + (1 if is_turn else 0)
+            nxt_state = (nr, nc, d_idx)
 
-            if nxt == goal:
+            if (nr, nc) == goal:
                 new_g = g + 1.0 + turn_cost
-                if new_g < g_cost.get(nxt, float("inf")):
-                    g_cost[nxt] = new_g
-                    came_from[nxt] = cur
-                    heapq.heappush(heap, (new_g, new_g, nxt))
+                if new_g < g_cost.get(nxt_state, float("inf")):
+                    g_cost[nxt_state] = new_g
+                    came_from[nxt_state] = cur_state
+                    heapq.heappush(heap, (new_g, new_g, new_turns, nxt_state))
                 continue
             if not phys.is_passable(nr, nc):
                 continue
 
             step_cost = 1.0 + turn_cost
-            if getattr(phys, "piece_adjacent", None) and phys.piece_adjacent[nr][nc] and cur != start:
-                step_cost += ADJACENT_PENALTY
+            if getattr(phys, "piece_adjacent", None) and phys.piece_adjacent[nr][nc]:
+                dist_start = abs(nr - sr) + abs(nc - sc)
+                dist_goal = abs(nr - gr) + abs(nc - gc)
+                if dist_start > 1 and dist_goal > 1:
+                    step_cost += ADJACENT_PENALTY
 
             new_g = g + step_cost
-            if new_g < g_cost.get(nxt, float("inf")):
-                g_cost[nxt] = new_g
-                came_from[nxt] = cur
-                heapq.heappush(heap, (new_g + h(nxt), new_g, nxt))
+            if new_g < g_cost.get(nxt_state, float("inf")):
+                g_cost[nxt_state] = new_g
+                came_from[nxt_state] = cur_state
+                heapq.heappush(heap, (new_g + h((nr, nc)), new_g, new_turns, nxt_state))
 
-    if goal not in came_from:
+    if goal_state is None:
         return None
 
     path = []
-    cur = goal
+    cur = goal_state
     while cur is not None:
-        path.append(cur)
+        path.append((cur[0], cur[1]))
         cur = came_from[cur]
     path.reverse()
 
