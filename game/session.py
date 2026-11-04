@@ -11,7 +11,7 @@ Fluxo de Menu e Inicio de Partida
      Magnus, followed by the words Start new game."
    - LCD: inalterado ("=== VOICE CHESS ===", "SAY: MAGNUS", "START NEW GAME", "TO BEGIN PLAY").
 2. CONFIGURE:
-   - Seleciona o modo de jogo: "Select the game mode. Say Magnus P V P, or Magnus P V E."
+   - Seleciona o modo de jogo: "Select the game mode. Option 1, Player versus Player. Option 2, Player versus Engine. Say Magnus Option 1, or Magnus Option 2."
    - Se escolher PvE:
      a) Seleciona dificuldade (1 a 10): "Select the difficulty level from 1 to 10. Say Magnus Level."
      b) Seleciona cor das pecas: "Select the piece color. Say Magnus White, or Magnus Black."
@@ -377,8 +377,14 @@ class VoiceChessGame:
             "2 - Player vs Engine",
             "Ex: Magnus Option 2",
         )
+        mode_speech = (
+            "Select the game mode. "
+            "Option 1, Player versus Player. "
+            "Option 2, Player versus Engine. "
+            "Say Magnus Option 1, or Magnus Option 2."
+        )
         self.lcd.show(*mode_lcd)
-        self.speaker.say("Select the game mode. Say Magnus Option 1, or Magnus Option 2.", wait=True)
+        self.speaker.say(mode_speech, wait=True)
 
         while True:
             result = self.listener.listen()
@@ -406,7 +412,7 @@ class VoiceChessGame:
                     return "pve"
 
             self.lcd.show(*mode_lcd)
-            self.speaker.say("Select the game mode. Say Magnus Option 1, or Magnus Option 2.", wait=True)
+            self.speaker.say(mode_speech, wait=True)
 
     def _prompt_difficulty_level(self) -> int | None:
         """Pergunta o nivel de dificuldade entre 1 e 10 (Magnus Level <1-10>)."""
