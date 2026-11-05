@@ -926,6 +926,101 @@ class VoiceChessGame:
                 continue
             return move
 
+    def _prompt_promotion_piece(self, turn_color: bool, available_types: list[int]) -> int | None:
+        """
+        Pergunta ao jogador qual peca deseja para a promocao do peao,
+        listando as pecas disponiveis no cemiterio.
+        """
+        promo_names = {
+            chess.QUEEN: "Queen",
+            chess.ROOK: "Rook",
+            chess.BISHOP: "Bishop",
+            chess.KNIGHT: "Knight",
+        }
+        action_map = {
+            "PROMOTE_QUEEN": chess.QUEEN,
+            "PROMOTE_ROOK": chess.ROOK,
+            "PROMOTE_BISHOP": chess.BISHOP,
+            "PROMOTE_KNIGHT": chess.KNIGHT,
+        }
+        side_led = self._side_led(turn_color)
+        opts_names = [promo_names[pt] for pt in available_types]
+        if len(opts_names) == 1:
+            opts_speech = opts_names[0]
+        else:
+            opts_speech = ", ".join(opts_names[:-1]) + ", or " + opts_names[-1]
+
+        opts_line = ", ".join(promo_names[pt].upper() for pt in available_types)
+        if len(opts_line) > 20:
+            short_names = {chess.QUEEN: "Q", chess.ROOK: "R", chess.BISHOP: "B", chess.KNIGHT: "N"}
+            opts_line = ", ".join(short_names[pt] for pt in available_types)
+
+        self._set_allowed_commands(
+            lambda c: (
+                isinstance(c, ActionCommand)
+                and (c.action in action_map or c.action in ("CANCEL", "RESIGN_GAME"))
+            )
+            or isinstance(c, MoveCommand)
+        )
+        self.speaker.say(
+            f"Which piece do you want to promote to? Available options: {opts_speech}.",
+            wait=True,
+        )
+
+        try:
+            while True:
+                self.lcd.show(
+                    "=== PROMOTION ===",
+                    "CHOOSE PIECE:",
+                    opts_line,
+                    "SAY: MAGNUS <PIECE>",
+                )
+                result = self.listener.listen()
+                if result.command is not None and not self._is_command_allowed(result.command):
+                    self._command_not_recognized(side=side_led)
+                    continue
+                if result.wake_detected and not result.command:
+                    self._command_not_recognized(side=side_led)
+                    continue
+                if result.command and not result.confirmed:
+                    self.lcd.show("=== PROMOTION ===", "CANCELLED", "", "")
+                    self.speaker.say("Cancelled.", wait=True)
+                    return None
+                if not result.confirmed:
+                    continue
+
+                cmd = result.command
+                if isinstance(cmd, ActionCommand):
+                    if cmd.action in ("CANCEL", "RESIGN_GAME"):
+                        self.lcd.show("=== PROMOTION ===", "CANCELLED", "", "")
+                        self.speaker.say("Cancelled.", wait=True)
+                        return None
+                    if cmd.action in action_map:
+                        chosen = action_map[cmd.action]
+                        if chosen in available_types:
+                            chosen_name = promo_names[chosen]
+                            self.lcd.show("PROMOTING TO", chosen_name.upper(), "PLEASE WAIT", "")
+                            self.speaker.say(f"Promoting to {chosen_name}.", wait=True)
+                            return chosen
+                        else:
+                            chosen_name = promo_names[chosen]
+                            self.lcd.show(
+                                "UNAVAILABLE",
+                                f"{chosen_name.upper()} NOT IN CEM",
+                                opts_line,
+                                "CHOOSE AGAIN",
+                            )
+                            self.speaker.say(
+                                f"{chosen_name} is not available in the cemetery. Available options: {opts_speech}.",
+                                wait=True,
+                            )
+                            continue
+                elif isinstance(cmd, MoveCommand):
+                    return None
+                self._command_not_recognized(side=side_led)
+        finally:
+            self._set_allowed_commands(self._is_active_game_command)
+
     def _resolve_move(self, cmd: MoveCommand) -> chess.Move | None:
         """Converte o comando de voz num lance legal e fisicamente executavel."""
         board = self.planner.board
@@ -933,15 +1028,76 @@ class VoiceChessGame:
             base = chess.Move.from_uci(f"{cmd.from_square}{cmd.to_square}".lower())
         except ValueError:
             return None
+
         piece = board.piece_at(base.from_square)
-        if piece and piece.piece_type == chess.PAWN and chess.square_rank(base.to_square) in (0, 7):
-            candidates = [chess.Move(base.from_square, base.to_square, promotion=p)
-                          for p in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)]
-        else:
-            candidates = [base]
-        for move in candidates:
-            if move in board.legal_moves and self.planner.is_phys_valid(move):
-                return move
+        is_promo = (
+            piece is not None
+            and piece.piece_type == chess.PAWN
+            and chess.square_rank(base.to_square) in (0, 7)
+        )
+
+        if is_promo:
+            promo_names = {
+                chess.QUEEN: "Queen",
+                chess.ROOK: "Rook",
+                chess.BISHOP: "Bishop",
+                chess.KNIGHT: "Knight",
+            }
+            promo_char_map = {
+                "q": chess.QUEEN,
+                "r": chess.ROOK,
+                "b": chess.BISHOP,
+                "n": chess.KNIGHT,
+            }
+            # Verifica quais pecas de promocao geram lances legais pelas regras do xadrez
+            all_chess_legal = [
+                p for p in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
+                if chess.Move(base.from_square, base.to_square, promotion=p) in board.legal_moves
+            ]
+            if not all_chess_legal:
+                return None
+
+            available_in_cem = self.planner.get_cemetery_pieces(board.turn)
+            legal_promotions = [p for p in all_chess_legal if p in available_in_cem]
+            if not legal_promotions:
+                self.lcd.show(
+                    "PROMOTION ERROR",
+                    "NO PIECE IN CEMETERY",
+                    "CANNOT PROMOTE",
+                    "",
+                )
+                self.speaker.say(
+                    "Cannot promote. There are no captured pieces available in the cemetery.",
+                    wait=True,
+                )
+                return None
+
+            # Se o jogador ja especificou a peca diretamente no comando (ex.: MAGNUS MOVE E7 E8 QUEEN)
+            requested_type = promo_char_map.get(cmd.promotion.lower()) if cmd.promotion else None
+            if requested_type is not None:
+                if requested_type in legal_promotions:
+                    chosen_name = promo_names[requested_type]
+                    self.speaker.say(f"Promoting to {chosen_name}.", wait=True)
+                    return chess.Move(base.from_square, base.to_square, promotion=requested_type)
+                p_name = promo_names.get(requested_type, "Piece")
+                self.lcd.show(
+                    "UNAVAILABLE",
+                    f"{p_name.upper()} NOT IN CEM",
+                    "CHOOSE ANOTHER",
+                    "",
+                )
+                self.speaker.say(
+                    f"{p_name} is not available in the cemetery.",
+                    wait=True,
+                )
+
+            chosen = self._prompt_promotion_piece(board.turn, legal_promotions)
+            if chosen is None:
+                return None
+            return chess.Move(base.from_square, base.to_square, promotion=chosen)
+
+        if base in board.legal_moves and self.planner.is_phys_valid(base):
+            return base
         return None
 
     def _invalid_move(self, side: str = PLAYER) -> None:

@@ -233,6 +233,11 @@ class MovePlanner:
                 return slot
         return None
 
+    def get_cemetery_pieces(self, color: bool) -> list[int]:
+        """Retorna os tipos de pecas (QUEEN, ROOK, BISHOP, KNIGHT) disponiveis fisicamente no cemiterio."""
+        order = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]
+        return [pt for pt in order if self.promotable_slot(pt, color) is not None]
+
     def is_phys_valid(self, move: chess.Move) -> bool:
         """Promocao so e possivel com uma peca ja capturada do tipo desejado."""
         if move.promotion is not None:

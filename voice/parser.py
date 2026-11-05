@@ -7,8 +7,11 @@ from dataclasses import dataclass
 class MoveCommand:
     from_square: str
     to_square: str
+    promotion: str | None = None
 
     def __str__(self):
+        if self.promotion:
+            return f"MOVE {self.from_square} {self.to_square} {self.promotion.upper()}"
         return f"MOVE {self.from_square} {self.to_square}"
 
 
@@ -155,6 +158,48 @@ ACTIONS = {
         "black pieces",
         "color black",
     ),
+    "PROMOTE_QUEEN": (
+        "queen",
+        "promote queen",
+        "promote to queen",
+        "choose queen",
+        "play queen",
+        "queen please",
+    ),
+    "PROMOTE_ROOK": (
+        "rook",
+        "tower",
+        "promote rook",
+        "promote to rook",
+        "play rook",
+        "choose rook",
+        "rook please",
+    ),
+    "PROMOTE_BISHOP": (
+        "bishop",
+        "promote bishop",
+        "promote to bishop",
+        "play bishop",
+        "choose bishop",
+        "bishop please",
+    ),
+    "PROMOTE_KNIGHT": (
+        "knight",
+        "horse",
+        "promote knight",
+        "promote to knight",
+        "promote horse",
+        "play knight",
+        "choose knight",
+        "knight please",
+    ),
+    "CANCEL": (
+        "cancel",
+        "cancel move",
+        "cancel promotion",
+        "abort",
+        "back",
+    ),
 }
 
 # Comandos que executam imediatamente apos "MAGNUS <COMANDO>" sem exigir confirmacao YES/NO.
@@ -171,6 +216,11 @@ IMMEDIATE_ACTIONS = {
     "MODE_VOICE",
     "COLOR_WHITE",
     "COLOR_BLACK",
+    "PROMOTE_QUEEN",
+    "PROMOTE_ROOK",
+    "PROMOTE_BISHOP",
+    "PROMOTE_KNIGHT",
+    "CANCEL",
 }
 IMMEDIATE_LEVEL = True
 
@@ -220,17 +270,28 @@ def parse(text: str, language: str | None = None) -> tuple[Command | None, str |
         return None, "No recognised command keyword."
     tokens = [DIGITS.get(t, COLUMNS.get(t, t)) for t in tokens[1:] if t not in FILLERS]
     squares = []
+    promo_piece = None
+    promo_map = {
+        "queen": "q",
+        "rook": "r",
+        "tower": "r",
+        "bishop": "b",
+        "knight": "n",
+        "horse": "n",
+    }
     while tokens:
         token = tokens.pop(0)
         if re.fullmatch(r"[a-h][1-8]", token):
             squares.append(token.upper())
         elif token in {*"abcdefgh", "8"} and tokens and tokens[0] in set("12345678"):
             squares.append(("h" if token == "8" else token).upper() + tokens.pop(0))
+        elif len(squares) == 2 and token in promo_map and promo_piece is None:
+            promo_piece = promo_map[token]
         else:
             return None, "Expected exactly two chess squares without ambiguous words."
     if len(squares) != 2:
         return None, "Expected exactly two chess squares."
-    return MoveCommand(*squares), None
+    return MoveCommand(squares[0], squares[1], promotion=promo_piece), None
 
 
 def parse_confirmation(text: str | None, language: str | None = None) -> bool | None:

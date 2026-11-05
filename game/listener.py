@@ -114,10 +114,16 @@ class TextListener:
         except EOFError:
             raise KeyboardInterrupt
         text = normalize(text)
-        if not text.startswith("magnus"):
-            return ListenResult(reason="Wake word not detected", wake_detected=False)
+        if text.startswith("magnus"):
+            raw_cmd = text[len("magnus"):].strip()
+        else:
+            cmd_test, _ = parse(text, "en-US")
+            if cmd_test is not None:
+                raw_cmd = text
+            else:
+                return ListenResult(reason="Wake word not detected", wake_detected=False)
         self._on_listening(True, "command")
-        command, reason = parse(text[len("magnus"):], "en-US")
+        command, reason = parse(raw_cmd, "en-US")
         checked = validate(command, reason)
         if not checked["valid"]:
             self._on_listening(False, "")
