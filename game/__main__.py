@@ -6,6 +6,7 @@ Uso:
     python -m game --text                # comandos digitados no terminal (sem microfone)
     python -m game --sim-gantry          # sem ESP32 (imprime os passos do Gantry)
     python -m game --sim-peripherals     # LEDs/LCD/speaker apenas no terminal
+    python -m game --sim-cam             # ignora as imagens da camera (visao simulada)
     python -m game --no-camera           # desativa a camera USB
     python -m game --port COM3           # porta serial do ESP32
 """
@@ -37,6 +38,7 @@ def main() -> None:
     ap.add_argument("--text", action="store_true", help="comandos por teclado em vez de voz")
     ap.add_argument("--sim-gantry", action="store_true", help="nao usa o ESP32")
     ap.add_argument("--sim-peripherals", action="store_true", help="LEDs/LCD/speaker simulados")
+    ap.add_argument("--sim-cam", action="store_true", help="ignora as imagens da camera (visao simulada)")
     ap.add_argument("--no-camera", action="store_true", help="desativa o sistema de visao (camera)")
     ap.add_argument("--camera-device", type=int, default=None, help="indice da camera USB (padrao: config.py)")
     ap.add_argument("--mode", choices=["pve", "pvp"], default=None, help="modo de jogo inicial (pve ou pvp)")
@@ -60,17 +62,22 @@ def main() -> None:
 
     camera = None
     if not args.no_camera:
-        try:
-            cam_kwargs = {}
-            if args.camera_device is not None:
-                cam_kwargs["device_index"] = args.camera_device
-            cam = CameraSystem(**cam_kwargs)
-            if cam.initialize():
-                camera = cam
-            else:
-                logging.warning("Camera nao pode ser inicializada; prosseguindo sem visao.")
-        except Exception as exc:
-            logging.warning("Falha ao iniciar CameraSystem (%s); prosseguindo sem visao.", exc)
+        if args.sim_cam:
+            from vision import SimulatedCamera
+            camera = SimulatedCamera()
+            camera.initialize()
+        else:
+            try:
+                cam_kwargs = {}
+                if args.camera_device is not None:
+                    cam_kwargs["device_index"] = args.camera_device
+                cam = CameraSystem(**cam_kwargs)
+                if cam.initialize():
+                    camera = cam
+                else:
+                    logging.warning("Camera nao pode ser inicializada; prosseguindo sem visao.")
+            except Exception as exc:
+                logging.warning("Falha ao iniciar CameraSystem (%s); prosseguindo sem visao.", exc)
 
     if args.text:
         from .listener import TextListener

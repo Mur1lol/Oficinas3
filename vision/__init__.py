@@ -53,10 +53,92 @@ log = logging.getLogger(__name__)
 
 __all__ = [
     "CameraSystem",
+    "SimulatedCamera",
     "GameSettings",
     "ManualValidationResult",
     "PositionVerificationResult",
 ]
+
+
+class SimulatedCamera:
+    """
+    Simula o sistema de visão ignorando as capturas e imagens reais da câmera.
+    Usado para desenvolvimento, quando a iluminação está desfavorável ou com a flag --sim-cam.
+    """
+
+    def __init__(self) -> None:
+        self._initialised = False
+
+    @property
+    def is_ready(self) -> bool:
+        return self._initialised
+
+    def initialize(self) -> bool:
+        self._initialised = True
+        log.info("[CameraSystem] (simulado) Câmera simulada inicializada — imagens ignoradas.")
+        return True
+
+    def shutdown(self) -> None:
+        self._initialised = False
+        log.info("[CameraSystem] (simulado) Câmera simulada encerrada.")
+
+    def verify_gantry_position(
+        self,
+        board,
+        last_move=None,
+        settle_seconds: float = 0.0,
+    ) -> PositionVerificationResult:
+        log.info("[CameraSystem] (simulado) verify_gantry_position: validação de imagem ignorada (OK).")
+        res = PositionVerificationResult(
+            success=True,
+            move_uci=last_move.uci().upper() if last_move else None,
+            origin_ok=True,
+            dest_ok=True,
+            color_ok=True,
+            mismatches=[],
+            matching_squares=64,
+            confidence=1.0,
+            message="Câmera simulada: validação de imagem ignorada com sucesso.",
+            speech="Position verified.",
+            lcd_lines=("POSITION VERIFIED", "CAMERA SIMULATED", "", ""),
+        )
+        try:
+            record_validation_event(res.to_dict())
+        except Exception:
+            pass
+        return res
+
+    def validate_manual_turn(
+        self,
+        board,
+        is_phys_valid_fn: Optional[Callable] = None,
+    ) -> ManualValidationResult:
+        res = ManualValidationResult(
+            valid=False,
+            error_code="SIM_CAM",
+            message="Câmera simulada ativa (imagens ignoradas). Fale o lance por voz (ex: Magnus Move E2 E4).",
+            speech="Camera is simulated. Please announce your move by voice.",
+            lcd_lines=("CAMERA SIMULATED", "USE VOICE MOVE", "SAY: MAGNUS MOVE", "EX: E2 TO E4"),
+        )
+        try:
+            record_validation_event(res.to_dict())
+        except Exception:
+            pass
+        return res
+
+    def capture_board_state(self) -> Optional[BoardState]:
+        return None
+
+    def validate_move(
+        self,
+        move: dict,
+        gantry_done_event: Optional[threading.Event] = None,
+        before_state: Optional[BoardState] = None,
+    ) -> CompareResult:
+        return CompareResult(
+            success=True,
+            message="Câmera simulada: movimento validado.",
+        )
 
 
 class CameraSystem:
@@ -70,7 +152,14 @@ class CameraSystem:
         exist, the system starts in uncalibrated mode (passthrough resize).
     device_index : int
         OpenCV camera device index.
+    simulate : bool
+        If True, returns a SimulatedCamera instance that ignores real camera images.
     """
+
+    def __new__(cls, *args, simulate: bool = False, **kwargs):
+        if simulate:
+            return SimulatedCamera()
+        return super().__new__(cls)
 
     def __init__(
         self,
