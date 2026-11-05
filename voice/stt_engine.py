@@ -31,6 +31,10 @@ class VoskSTTEngine:
         }
         self.vad = webrtcvad.Vad(2)
 
+    @staticmethod
+    def _is_wake_word(text: str) -> bool:
+        return "magnus" in normalize(text).split()
+
     def listen(self, stream, stage: str, timeout: float | None) -> str | None:
         recognizer = self.recognizers[stage]
         recognizer.Reset()
@@ -58,19 +62,43 @@ class VoskSTTEngine:
                 speech = True
                 for previous in preroll:
                     if recognizer.AcceptWaveform(previous):
-                        parts.append(json.loads(recognizer.Result()).get("text", ""))
+                        res = json.loads(recognizer.Result()).get("text", "")
+                        parts.append(res)
+                        if stage == "wake" and self._is_wake_word(res):
+                            logger.debug("Wake word detected in preroll Result: {!r}", res)
+                            stream.check()
+                            return "magnus"
+                    elif stage == "wake":
+                        partial = json.loads(recognizer.PartialResult()).get("partial", "")
+                        if self._is_wake_word(partial):
+                            logger.debug("Wake word detected in preroll PartialResult: {!r}", partial)
+                            stream.check()
+                            return "magnus"
                 preroll.clear()
-            elif recognizer.AcceptWaveform(frame):
-                parts.append(json.loads(recognizer.Result()).get("text", ""))
+            else:
+                if recognizer.AcceptWaveform(frame):
+                    res = json.loads(recognizer.Result()).get("text", "")
+                    parts.append(res)
+                    if stage == "wake" and self._is_wake_word(res):
+                        logger.debug("Wake word detected in Result: {!r}", res)
+                        stream.check()
+                        return "magnus"
+                elif stage == "wake":
+                    partial = json.loads(recognizer.PartialResult()).get("partial", "")
+                    if self._is_wake_word(partial):
+                        logger.debug("Wake word detected in PartialResult: {!r}", partial)
+                        stream.check()
+                        return "magnus"
+
             silence = 0 if voiced else silence + FRAME_MS
             if silence < self.settings.silence_ms:
                 continue
             parts.append(json.loads(recognizer.FinalResult()).get("text", ""))
             text = " ".join(part for part in parts if part).strip()
             logger.debug("{} transcript: {!r}", stage, text)
-            if text and (stage != "wake" or normalize(text) == "magnus"):
+            if text and (stage != "wake" or self._is_wake_word(text)):
                 stream.check()
-                return text
+                return "magnus" if stage == "wake" else text
             recognizer.Reset()
             speech, silence, parts = False, 0, []
         return None
