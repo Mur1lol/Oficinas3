@@ -314,9 +314,12 @@ def grammar(stage: str, language: str = "en-US") -> list[str]:
         | OPTION_WORDS
         | FILLERS
         | set(LEVEL_DIGITS)
-        | VALID_LEVEL_STRS
         | set(COLUMNS)
         | set("abcdefgh")
     )
     words |= {word for phrases in ACTIONS.values() for phrase in phrases for word in phrase.split()}
+    # Remove digitos (ex: '1' a '10') e siglas nao foneticas ('pvp', 'pve') que nao
+    # constam no dicionario fonetico do Vosk. O Vosk reconhece palavras faladas
+    # ('one', 'two', 'three', 'p v p', etc.), que o parser traduz para comandos.
+    words = {w for w in words if not any(c.isdigit() for c in w) and w not in {"pvp", "pve"}}
     return sorted(words | {"[unk]"})
