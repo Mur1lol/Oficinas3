@@ -58,6 +58,10 @@ class VoiceListener:
         self._before_listen = before_listen
         from pathlib import Path
         settings = load_settings(Path(voice_config) if voice_config else None)
+        import sys
+        from loguru import logger
+        logger.remove()
+        logger.add(sys.stderr, format="{time:HH:mm:ss} | {message}", level=settings.log_level)
         self._pipeline = VoiceCommandPipeline(settings, on_state=self._on_state)
         self._ctx = AudioStream(settings)
         self._stream = self._ctx.__enter__()

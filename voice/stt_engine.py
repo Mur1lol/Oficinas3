@@ -40,16 +40,37 @@ class VoskSTTEngine:
         }
         self.vad = webrtcvad.Vad(settings.vad_aggressiveness)
         self._noise_floor = None
+        self.recognizers["wake"].SetWords(True)
 
     @staticmethod
     def _is_wake_word(text: str) -> bool:
         return "magnus" in normalize(text).split()
 
+    def _wake_ok(self, res: dict) -> bool:
+        """Aceita a wake word somente com resultado FINAL, palavra unica, confianca e duracao minimas."""
+        heard = normalize(res.get("text", ""))
+        if not heard:
+            return False
+        if heard.split() != ["magnus"]:
+            logger.info("[VOZ] Wake word IGNORADA: ouvi {!r} (esperado 'magnus')", heard)
+            return False
+        words = res.get("result") or []
+        conf = float(words[0].get("conf", 0.0)) if words else 0.0
+        dur = float(words[0].get("end", 0.0)) - float(words[0].get("start", 0.0)) if words else 0.0
+        if conf < self.settings.wake_confidence or dur < self.settings.wake_min_duration:
+            logger.info(
+                "[VOZ] Wake word REJEITADA: ouvi 'magnus' mas conf={:.2f} (min {:.2f}) dur={:.2f}s (min {:.2f}s)",
+                conf, self.settings.wake_confidence, dur, self.settings.wake_min_duration,
+            )
+            return False
+        logger.info("[VOZ] Wake word CONFIRMADA: 'magnus' conf={:.2f} dur={:.2f}s -> ouvindo comando", conf, dur)
+        return True
+
     @staticmethod
     def _early_match(text: str) -> bool:
         """True se o texto (parcial ou final) ja forma um comando valido completo."""
         norm = normalize(text)
-        if not norm or norm in AMBIGUOUS_PREFIXES:
+        if not norm or norm.split()[-1] in AMBIGUOUS_PREFIXES:
             return False
         command, _ = parse(norm)
         return command is not None
@@ -103,7 +124,14 @@ class VoskSTTEngine:
                 to_feed = [frame]
 
             for chunk in to_feed:
-                if recognizer.AcceptWaveform(chunk):
+                accepted = recognizer.AcceptWaveform(chunk)
+                if stage == "wake":
+                    # Wake word: apenas resultado FINAL (nunca parcial) para evitar falso positivo
+                    if accepted and self._wake_ok(json.loads(recognizer.Result())):
+                        stream.check()
+                        return "magnus"
+                    continue
+                if accepted:
                     res = json.loads(recognizer.Result()).get("text", "")
                     if res:
                         parts.append(res)
@@ -112,16 +140,11 @@ class VoskSTTEngine:
                     partial = json.loads(recognizer.PartialResult()).get("partial", "")
                     current = " ".join(parts + [partial]).strip()
 
-                if stage == "wake" and self._is_wake_word(current):
-                    logger.info("[VOZ] Wake word detectada: {!r}", current)
-                    stream.check()
-                    return "magnus"
                 if stage == "command":
                     if current and self._early_match(current):
                         stable = stable + 1 if current == last_text else 1
                         last_text = current
                         if stable >= EARLY_STABLE_FRAMES:
-                            logger.info("[VOZ] Comando valido detectado: {!r} -> executando", current)
                             stream.check()
                             return current
                     else:
@@ -130,12 +153,17 @@ class VoskSTTEngine:
             silence = 0 if voiced else silence + FRAME_MS
             if silence < self.settings.silence_ms:
                 continue
-            parts.append(json.loads(recognizer.FinalResult()).get("text", ""))
-            text = " ".join(part for part in parts if part).strip()
-            logger.debug("{} transcript: {!r}", stage, text)
-            if text and (stage != "wake" or self._is_wake_word(text)):
-                stream.check()
-                return "magnus" if stage == "wake" else text
+            final = json.loads(recognizer.FinalResult())
+            if stage == "wake":
+                if self._wake_ok(final):
+                    stream.check()
+                    return "magnus"
+            else:
+                parts.append(final.get("text", ""))
+                text = " ".join(part for part in parts if part).strip()
+                if text:
+                    stream.check()
+                    return text
             recognizer.Reset()
             speech, silence, voiced_run, parts = False, 0, 0, []
             last_text, stable = "", 0

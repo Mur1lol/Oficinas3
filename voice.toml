@@ -10,5 +10,7 @@ silence_ms = 450
 vad_aggressiveness = 3
 min_rms = 200
 min_speech_ms = 90
+wake_confidence = 0.7
+wake_min_duration = 0.3
 wake_backend = "vosk"
 log_level = "INFO"

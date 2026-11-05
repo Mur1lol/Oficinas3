@@ -99,21 +99,24 @@ class VoiceCommandPipeline:
         self._set_state(PipelineState.COMMAND_LISTEN)
         text = self.recognizer.listen(stream, "command", self.settings.command_timeout)
         if not text:
+            logger.warning("[VOZ] Nenhum comando ouvido (timeout de {}s)", self.settings.command_timeout)
             return self._failure(None, "Command timed out", wake_detected=True)
+        logger.info("[VOZ] Ouvi: {!r}", text)
         self._set_state(PipelineState.PARSE)
         command, reason = parse(text, self.settings.language)
         self._set_state(PipelineState.VALIDATE, command)
         checked = validate(command, reason)
         if not checked["valid"]:
+            logger.warning("[VOZ] NAO ENTENDI {!r}: {}", text, checked["reason"])
             return self._failure(command, checked["reason"], wake_detected=True)
 
         # Bloqueio de comandos por estado (impede usar comandos fora do momento permitido)
         if self.command_filter is not None and not self.command_filter(command):
-            logger.warning("[VOZ] Comando bloqueado no estado atual: {!r}", command)
+            logger.warning("[VOZ] Entendi {} mas NAO e permitido neste momento do jogo", command)
             return self._failure(command, "Command not allowed in current state", wake_detected=True)
 
         # Comandos validos sao executados imediatamente sem exigir confirmacao YES/NO
-        logger.info("[VOZ] Comando valido identificado: {!r} -> Executando imediatamente.", command)
+        logger.info("[VOZ] ENTENDI: {} -> EXECUTANDO", command)
         stream.check()
         self._set_state(PipelineState.EMIT, command)
         return VoiceResult(command, confirmed=True, wake_detected=True)

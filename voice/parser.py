@@ -247,6 +247,27 @@ def normalize(text: str) -> str:
 
 
 def parse(text: str, language: str | None = None) -> tuple[Command | None, str | None]:
+    """
+    Interpreta o texto ouvido. Primeiro tenta o texto inteiro como comando; se falhar,
+    procura um comando em QUALQUER ponto do texto (ignorando palavras ao redor, ex.:
+    "please start new game", "ok move e two e four"). Em caso de varios candidatos,
+    vence o trecho mais longo (e, em empate, o mais a esquerda).
+    """
+    command, reason = _parse_exact(text, language)
+    if command is not None:
+        return command, None
+    tokens = normalize(text).split()
+    n = len(tokens)
+    for length in range(n - 1, 0, -1):
+        for start in range(0, n - length + 1):
+            window = " ".join(tokens[start:start + length])
+            found, _ = _parse_exact(window, language)
+            if found is not None:
+                return found, None
+    return None, reason
+
+
+def _parse_exact(text: str, language: str | None = None) -> tuple[Command | None, str | None]:
     text = normalize(text)
     if not text:
         return None, "Received empty transcript."

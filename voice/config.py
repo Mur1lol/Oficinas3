@@ -22,6 +22,8 @@ class Settings:
     vad_aggressiveness: int = 3
     min_rms: int = 200
     min_speech_ms: int = 90
+    wake_confidence: float = 0.7
+    wake_min_duration: float = 0.3
     wake_backend: str = "vosk"
     log_level: str = "INFO"
 
@@ -47,6 +49,10 @@ class Settings:
             raise ValueError("min_rms must be an integer between 0 and 10000")
         if type(self.min_speech_ms) is not int or not 30 <= self.min_speech_ms <= 600:
             raise ValueError("min_speech_ms must be an integer between 30 and 600")
+        if type(self.wake_confidence) not in (int, float) or not 0 <= self.wake_confidence <= 1:
+            raise ValueError("wake_confidence must be between 0 and 1")
+        if type(self.wake_min_duration) not in (int, float) or not 0 <= self.wake_min_duration <= 3:
+            raise ValueError("wake_min_duration must be between 0 and 3 seconds")
         if self.wake_backend not in {"vosk", "openwakeword"}:
             raise ValueError("wake_backend must be vosk or openwakeword")
         if self.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
