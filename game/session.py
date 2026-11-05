@@ -1109,6 +1109,7 @@ class VoiceChessGame:
             return chess.Move(base.from_square, base.to_square, promotion=chosen)
 
         if base in board.legal_moves and self.planner.is_phys_valid(base):
+            log.info("[GAME] Lance valido resolvido: %s", base.uci().upper())
             return base
         return None
 
@@ -1138,6 +1139,7 @@ class VoiceChessGame:
         (quando a camera estiver ativa) captura uma foto para verificar a posicao.
         """
         speech, lines = phrases.announce(self.planner.board, move)
+        log.info("[GAME] Executando no Gantry: %s (UCI: %s)", speech, move.uci().upper())
         self.lcd.show(*lines)
         self.speaker.say(speech, wait=False)
         try:

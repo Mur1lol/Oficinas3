@@ -18,7 +18,10 @@ class Settings:
     command_timeout: float = 10.0
     confirmation_timeout: float = 10.0
     audio_timeout: float = 2.0
-    silence_ms: int = 600
+    silence_ms: int = 450
+    vad_aggressiveness: int = 3
+    min_rms: int = 200
+    min_speech_ms: int = 90
     wake_backend: str = "vosk"
     log_level: str = "INFO"
 
@@ -38,6 +41,12 @@ class Settings:
                 raise ValueError(f"{name} must be finite and positive")
         if type(self.silence_ms) is not int or not 90 <= self.silence_ms <= 3000:
             raise ValueError("silence_ms must be an integer between 90 and 3000")
+        if type(self.vad_aggressiveness) is not int or not 0 <= self.vad_aggressiveness <= 3:
+            raise ValueError("vad_aggressiveness must be an integer between 0 and 3")
+        if type(self.min_rms) is not int or not 0 <= self.min_rms <= 10000:
+            raise ValueError("min_rms must be an integer between 0 and 10000")
+        if type(self.min_speech_ms) is not int or not 30 <= self.min_speech_ms <= 600:
+            raise ValueError("min_speech_ms must be an integer between 30 and 600")
         if self.wake_backend not in {"vosk", "openwakeword"}:
             raise ValueError("wake_backend must be vosk or openwakeword")
         if self.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:

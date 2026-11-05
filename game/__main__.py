@@ -52,7 +52,7 @@ def main() -> None:
                     help="mantem o gantry na ultima posicao entre lances")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
 
     leds = StatusLeds(simulate=args.sim_peripherals)

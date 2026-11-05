@@ -131,6 +131,7 @@ class TextListener:
         self._on_listening(False, "")
 
         if self._command_filter is not None and not self._command_filter(command):
+            print(f"   [VOZ] Comando bloqueado no estado atual: {command}")
             return ListenResult(
                 command,
                 confirmed=False,
@@ -138,21 +139,8 @@ class TextListener:
                 wake_detected=True,
             )
 
-        # Comandos imediatos nao pedem confirmacao YES/NO (deixe comentado caso mude de ideia):
-        if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
-            isinstance(command, LevelCommand) and IMMEDIATE_LEVEL
-        ):
-            return ListenResult(command, confirmed=True, wake_detected=True)
-
-        self._on_confirm(command)
-        self._on_listening(True, "confirmation")
-        answer = input("[voz] confirma? (yes/no): ")
-        self._on_listening(False, "")
-        confirmed = parse_confirmation(answer, "en-US")
-        if confirmed is True:
-            return ListenResult(command, confirmed=True, wake_detected=True)
-        return ListenResult(command, reason="Command cancelled" if confirmed is False
-                            else "Confirmation missing or ambiguous", wake_detected=True)
+        print(f"   [VOZ] Comando valido identificado: {command} -> Executando imediatamente.")
+        return ListenResult(command, confirmed=True, wake_detected=True)
 
     def listen_yes_no(self) -> bool | None:
         self._before_listen()

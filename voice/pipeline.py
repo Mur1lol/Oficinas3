@@ -109,26 +109,11 @@ class VoiceCommandPipeline:
 
         # Bloqueio de comandos por estado (impede usar comandos fora do momento permitido)
         if self.command_filter is not None and not self.command_filter(command):
+            logger.warning("[VOZ] Comando bloqueado no estado atual: {!r}", command)
             return self._failure(command, "Command not allowed in current state", wake_detected=True)
 
-        # Comandos imediatos (ex: START NEW GAME, OPTION 1/2, LEVEL, WHITE/BLACK, VALIDATE)
-        # nao precisam de confirmacao YES/NO. Caso mude de ideia, comente o bloco abaixo:
-        if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
-            isinstance(command, LevelCommand) and IMMEDIATE_LEVEL
-        ):
-            stream.check()
-            self._set_state(PipelineState.EMIT, command)
-            return VoiceResult(command, confirmed=True, wake_detected=True)
-
-        stream.discard_pending()
-        self._set_state(PipelineState.CONFIRMATION_LISTEN, command)
-        answer = self.recognizer.listen(stream, "confirmation", self.settings.confirmation_timeout)
-        confirmed = parse_confirmation(answer, self.settings.language)
-        if confirmed is not True:
-            reason = (
-                "Command cancelled" if confirmed is False else "Confirmation missing or ambiguous"
-            )
-            return self._failure(command, reason, wake_detected=True)
+        # Comandos validos sao executados imediatamente sem exigir confirmacao YES/NO
+        logger.info("[VOZ] Comando valido identificado: {!r} -> Executando imediatamente.", command)
         stream.check()
         self._set_state(PipelineState.EMIT, command)
         return VoiceResult(command, confirmed=True, wake_detected=True)
