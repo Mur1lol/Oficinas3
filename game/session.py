@@ -605,11 +605,23 @@ class VoiceChessGame:
         self._engine = chess.engine.SimpleEngine.popen_uci(self._stockfish_path)
         skill, elo = cfg.SKILL_MAP.get(self.level, cfg.SKILL_MAP[cfg.DEFAULT_LEVEL])
         try:
-            self._engine.configure({"Skill Level": skill})
-            if elo:
-                self._engine.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
-            else:
-                self._engine.configure({"UCI_LimitStrength": False})
+            options: dict[str, object] = {}
+            if "Skill Level" in self._engine.options:
+                options["Skill Level"] = skill
+
+            elo_opt = self._engine.options.get("UCI_Elo")
+            min_elo = elo_opt.min if elo_opt and elo_opt.min is not None else 1320
+            max_elo = elo_opt.max if elo_opt and elo_opt.max is not None else 3190
+
+            if elo is not None and elo >= min_elo and "UCI_LimitStrength" in self._engine.options:
+                options["UCI_LimitStrength"] = True
+                options["UCI_Elo"] = min(elo, max_elo)
+            elif "UCI_LimitStrength" in self._engine.options:
+                options["UCI_LimitStrength"] = False
+
+            if options:
+                self._engine.configure(options)
+            log.info("Stockfish configurado: level=%d, options=%s", self.level, options)
         except Exception as exc:                              # noqa: BLE001
             log.warning("Nao foi possivel ajustar o nivel do Stockfish: %s", exc)
 

@@ -85,17 +85,20 @@ VOICE_CONFIG = ROOT / "voice.toml"
 
 # ── Stockfish ─────────────────────────────────────────────────────────────────
 # nivel (1 a 10) -> (Skill Level, UCI_Elo ou None)
+# Nota: O Stockfish possui limite minimo para a opcao "UCI_Elo" (tipicamente 1320).
+# Para niveis 1 a 4, a forca e dosada atraves de "Skill Level" (0 a 20),
+# evitando erros de "UCI_Elo too low" e proporcionando jogos amigaveis a iniciantes.
 SKILL_MAP = {
-    1:  (0, 800),     # Very Easy
-    2:  (2, 950),
-    3:  (4, 1100),
-    4:  (6, 1300),
-    5:  (9, 1500),
-    6:  (11, 1700),
-    7:  (14, 1950),
-    8:  (16, 2200),
-    9:  (18, 2500),
-    10: (20, None),   # Super Hard
+    1:  (0, None),     # Very Easy (erros frequentes, nivel iniciante)
+    2:  (1, None),     # Easy
+    3:  (3, None),     # Casual
+    4:  (5, None),     # Intermediario baixo
+    5:  (8, 1500),     # Intermediario (Elo ~1500)
+    6:  (11, 1700),    # Avancado (Elo ~1700)
+    7:  (14, 1950),    # Clube (Elo ~1950)
+    8:  (17, 2200),    # Mestre (Elo ~2200)
+    9:  (19, 2500),    # Grande Mestre (Elo ~2500)
+    10: (20, None),    # Maximo / Super Hard (forca maxima irrestrita)
 }
 DEFAULT_LEVEL = 3
 ENGINE_THINK_SECONDS = 0.5
