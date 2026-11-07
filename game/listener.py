@@ -61,7 +61,12 @@ class VoiceListener:
         import sys
         from loguru import logger
         logger.remove()
-        logger.add(sys.stderr, format="{time:HH:mm:ss} | {message}", level=settings.log_level)
+        logger.add(
+            sys.stderr,
+            colorize=True,
+            format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | <level>{message}</level>",
+            level=settings.log_level,
+        )
         self._pipeline = VoiceCommandPipeline(settings, on_state=self._on_state)
         self._ctx = AudioStream(settings)
         self._stream = self._ctx.__enter__()

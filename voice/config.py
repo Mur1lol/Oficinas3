@@ -18,7 +18,8 @@ class Settings:
     command_timeout: float = 10.0
     confirmation_timeout: float = 10.0
     audio_timeout: float = 2.0
-    silence_ms: int = 450
+    silence_ms: int = 800
+    incomplete_timeout: float = 3.0
     vad_aggressiveness: int = 3
     min_rms: int = 200
     min_speech_ms: int = 90
@@ -37,7 +38,7 @@ class Settings:
             raise ValueError("device_name must identify a microphone")
         if type(self.capture_rate) is not int or self.capture_rate not in {16000, 44100, 48000}:
             raise ValueError("capture_rate must be 16000, 44100 or 48000")
-        for name in ("command_timeout", "confirmation_timeout", "audio_timeout"):
+        for name in ("command_timeout", "confirmation_timeout", "audio_timeout", "incomplete_timeout"):
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")

@@ -9,17 +9,26 @@ from loguru import logger
 
 from .audio_capture import AudioError
 from .config import FRAME_BYTES, FRAME_MS, SAMPLE_RATE, Settings
-from .parser import grammar, normalize, parse
+from .parser import COMPLETE, PREFIX, grammar, match_status, normalize
 
-# Palavras que sozinhas sao ambiguas (ex.: "play" = NEW_GAME ou inicio de "play e2 e4").
-AMBIGUOUS_PREFIXES = {"play"}
-# Frames de 30 ms consecutivos com o mesmo comando parcial antes de executar.
-EARLY_STABLE_FRAMES = 3
 # Voz precisa ser NOISE_MARGIN x mais forte que o ruido de fundo estimado.
 NOISE_MARGIN = 2.5
 
 
+def _clean(text: str) -> str:
+    """Remove [unk] e normaliza."""
+    return " ".join(w for w in normalize(text).split() if w != "unk")
+
+
 class VoskSTTEngine:
+    """
+    Reconhecimento deterministico:
+    * Nunca usa resultado PARCIAL para decidir (nada de "chutar").
+    * Uma frase termina apos ``silence_ms`` de silencio (pausa entre palavras).
+    * Se o texto e um PREFIXO de comando (ex.: "option", "level", "move e two"),
+      continua ouvindo por ate ``incomplete_timeout`` segundos esperando o resto.
+    """
+
     def __init__(self, settings: Settings):
         import webrtcvad
         from vosk import KaldiRecognizer, Model, SetLogLevel
@@ -38,42 +47,44 @@ class VoskSTTEngine:
             )
             for stage in ("wake", "command", "confirmation")
         }
+        for rec in self.recognizers.values():
+            rec.SetWords(True)
         self.vad = webrtcvad.Vad(settings.vad_aggressiveness)
         self._noise_floor = None
-        self.recognizers["wake"].SetWords(True)
 
-    @staticmethod
-    def _is_wake_word(text: str) -> bool:
-        return "magnus" in normalize(text).split()
+    # ── wake word ────────────────────────────────────────────────────────────
 
-    def _wake_ok(self, res: dict) -> bool:
-        """Aceita a wake word somente com resultado FINAL, palavra unica, confianca e duracao minimas."""
-        heard = normalize(res.get("text", ""))
+    def _wake_split(self, res: dict) -> str | None:
+        """
+        Aceita "[unk] magnus [unk] ..." somente no resultado FINAL, com confianca e duracao
+        minimas na palavra "magnus". Retorna "magnus <resto>" (o resto pode ja ser o comando).
+        """
+        heard = _clean(res.get("text", ""))
         if not heard:
-            return False
-        if heard.split() != ["magnus"]:
-            logger.info("[VOZ] Wake word IGNORADA: ouvi {!r} (esperado 'magnus')", heard)
-            return False
+            return None
         words = res.get("result") or []
-        conf = float(words[0].get("conf", 0.0)) if words else 0.0
-        dur = float(words[0].get("end", 0.0)) - float(words[0].get("start", 0.0)) if words else 0.0
-        if conf < self.settings.wake_confidence or dur < self.settings.wake_min_duration:
-            logger.info(
-                "[VOZ] Wake word REJEITADA: ouvi 'magnus' mas conf={:.2f} (min {:.2f}) dur={:.2f}s (min {:.2f}s)",
-                conf, self.settings.wake_confidence, dur, self.settings.wake_min_duration,
-            )
-            return False
-        logger.info("[VOZ] Wake word CONFIRMADA: 'magnus' conf={:.2f} dur={:.2f}s -> ouvindo comando", conf, dur)
-        return True
+        saw_magnus = False
+        for idx, w in enumerate(words):
+            if w.get("word") != "magnus":
+                continue
+            saw_magnus = True
+            conf = float(w.get("conf", 0.0))
+            dur = float(w.get("end", 0.0)) - float(w.get("start", 0.0))
+            if conf < self.settings.wake_confidence or dur < self.settings.wake_min_duration:
+                logger.info(
+                    "[VOZ] Wake word REJEITADA: ouvi {!r} | 'magnus' conf={:.2f} (min {:.2f}) "
+                    "dur={:.2f}s (min {:.2f}s)",
+                    heard, conf, self.settings.wake_confidence, dur, self.settings.wake_min_duration,
+                )
+                continue
+            rest = " ".join(x["word"] for x in words[idx + 1:] if x.get("word") not in ("[unk]", "magnus"))
+            logger.success("[VOZ] Wake word CONFIRMADA: ouvi {!r} | conf={:.2f} dur={:.2f}s", heard, conf, dur)
+            return f"magnus {rest}".strip()
+        if not saw_magnus:
+            logger.debug("[VOZ] Ignorado (sem 'magnus'): {!r}", heard)
+        return None
 
-    @staticmethod
-    def _early_match(text: str) -> bool:
-        """True se o texto (parcial ou final) ja forma um comando valido completo."""
-        norm = normalize(text)
-        if not norm or norm.split()[-1] in AMBIGUOUS_PREFIXES:
-            return False
-        command, _ = parse(norm)
-        return command is not None
+    # ── ruido ────────────────────────────────────────────────────────────────
 
     def _is_voiced(self, frame: bytes) -> bool:
         """VAD + gate de energia adaptativo para rejeitar ruido de fundo."""
@@ -89,7 +100,9 @@ class VoskSTTEngine:
             threshold = max(threshold, NOISE_MARGIN * self._noise_floor)
         return vad_voiced and rms >= threshold
 
-    def listen(self, stream, stage: str, timeout: float | None) -> str | None:
+    # ── escuta ───────────────────────────────────────────────────────────────
+
+    def listen(self, stream, stage: str, timeout: float | None, initial: str = "") -> str | None:
         recognizer = self.recognizers[stage]
         recognizer.Reset()
         deadline = time.monotonic() + timeout if timeout is not None else float("inf")
@@ -98,12 +111,22 @@ class VoskSTTEngine:
         speech = False
         silence = 0
         voiced_run = 0
-        parts = []
+        parts: list[str] = [initial] if initial else []
+        waiting_since = time.monotonic() if initial else None
         preroll = deque(maxlen=min_frames + 6)
-        last_text, stable = "", 0
+
+        def text_so_far() -> str:
+            return " ".join(p for p in parts if p).strip()
+
         while time.monotonic() < deadline:
             frame = stream.read_frame(min(0.1, max(0, deadline - time.monotonic())))
             now = time.monotonic()
+
+            # Comando incompleto: desiste se a proxima palavra nao vier a tempo
+            if not speech and waiting_since is not None and now - waiting_since >= self.settings.incomplete_timeout:
+                logger.warning("[VOZ] Comando incompleto, proxima palavra nao veio: {!r}", text_so_far())
+                return text_so_far()
+
             if frame is None:
                 if now - last_frame >= self.settings.audio_timeout:
                     raise AudioError("No audio frames received from microphone")
@@ -112,62 +135,69 @@ class VoskSTTEngine:
             if len(frame) != FRAME_BYTES:
                 raise AudioError("Expected 30 ms PCM frames at 16 kHz")
             voiced = self._is_voiced(frame)
+
             if not speech:
                 preroll.append(frame)
                 voiced_run = voiced_run + 1 if voiced else 0
                 if voiced_run < min_frames:
                     continue
                 speech = True
+                waiting_since = None
+                if timeout is not None:
+                    deadline = max(deadline, now + self.settings.incomplete_timeout)
                 to_feed = list(preroll)
                 preroll.clear()
             else:
                 to_feed = [frame]
 
             for chunk in to_feed:
-                accepted = recognizer.AcceptWaveform(chunk)
-                if stage == "wake":
-                    # Wake word: apenas resultado FINAL (nunca parcial) para evitar falso positivo
-                    if accepted and self._wake_ok(json.loads(recognizer.Result())):
-                        stream.check()
-                        return "magnus"
-                    continue
-                if accepted:
-                    res = json.loads(recognizer.Result()).get("text", "")
-                    if res:
-                        parts.append(res)
-                    current = " ".join(parts).strip()
-                else:
-                    partial = json.loads(recognizer.PartialResult()).get("partial", "")
-                    current = " ".join(parts + [partial]).strip()
-
-                if stage == "command":
-                    if current and self._early_match(current):
-                        stable = stable + 1 if current == last_text else 1
-                        last_text = current
-                        if stable >= EARLY_STABLE_FRAMES:
+                if recognizer.AcceptWaveform(chunk):
+                    res = json.loads(recognizer.Result())
+                    if stage == "wake":
+                        hit = self._wake_split(res)
+                        if hit:
                             stream.check()
-                            return current
+                            return hit
                     else:
-                        stable, last_text = 0, ""
+                        parts.append(_clean(res.get("text", "")))
 
             silence = 0 if voiced else silence + FRAME_MS
             if silence < self.settings.silence_ms:
                 continue
-            final = json.loads(recognizer.FinalResult())
-            if stage == "wake":
-                if self._wake_ok(final):
-                    stream.check()
-                    return "magnus"
-            else:
-                parts.append(final.get("text", ""))
-                text = " ".join(part for part in parts if part).strip()
-                if text:
-                    stream.check()
-                    return text
+
+            # Fim da frase (pausa entre palavras atingida)
+            res = json.loads(recognizer.FinalResult())
             recognizer.Reset()
-            speech, silence, voiced_run, parts = False, 0, 0, []
-            last_text, stable = "", 0
-        return None
+            speech, silence, voiced_run = False, 0, 0
+
+            if stage == "wake":
+                hit = self._wake_split(res)
+                if hit:
+                    stream.check()
+                    return hit
+                continue
+
+            parts.append(_clean(res.get("text", "")))
+            text = text_so_far()
+            if not text:
+                continue                                   # so ruido / [unk]
+            if stage != "command":
+                stream.check()
+                return text
+            status = match_status(text)
+            if status == COMPLETE:
+                stream.check()
+                return text
+            if status == PREFIX:
+                logger.info("[VOZ] Ouvi {!r} -> aguardando proxima palavra...", text)
+                now = time.monotonic()
+                waiting_since = now
+                if timeout is not None:
+                    deadline = max(deadline, now + self.settings.incomplete_timeout)
+                continue
+            stream.check()
+            return text                                    # invalido: pipeline informa o erro
+        return text_so_far() or None
 
     def transcribe_file(self, path) -> str | None:
         recognizer = self.recognizers["command"]
@@ -183,6 +213,6 @@ class VoskSTTEngine:
                 raise ValueError("WAV must be uncompressed mono, 16-bit, 16000 Hz")
             while data := source.readframes(SAMPLE_RATE * FRAME_MS // 1000):
                 if recognizer.AcceptWaveform(data):
-                    parts.append(json.loads(recognizer.Result()).get("text", ""))
-        parts.append(json.loads(recognizer.FinalResult()).get("text", ""))
+                    parts.append(_clean(json.loads(recognizer.Result()).get("text", "")))
+        parts.append(_clean(json.loads(recognizer.FinalResult()).get("text", "")))
         return " ".join(part for part in parts if part).strip() or None

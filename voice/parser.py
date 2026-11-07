@@ -1,3 +1,27 @@
+"""
+voice/parser.py
+===============
+Gramatica ESTRITA e deterministica dos comandos de voz.
+
+Regras:
+* Palavras fora do vocabulario chegam do Vosk como ``[unk]`` e sao descartadas.
+* O que sobra precisa formar EXATAMENTE um dos comandos abaixo (nada a mais, nada a menos):
+
+    START [NEW] GAME              -> NEW_GAME   (primeira e ultima palavra obrigatorias)
+    OPTION ONE | OPTION TWO       -> MODE_PVP / MODE_PVE
+    LEVEL ONE .. LEVEL TEN        -> LevelCommand(1..10)
+    WHITE | BLACK                 -> COLOR_WHITE / COLOR_BLACK
+    VALIDATE                      -> VALIDATE_MOVE
+    REPEAT                        -> REPEAT_MOVE
+    RESIGN [GAME]                 -> RESIGN_GAME
+    CANCEL                        -> CANCEL
+    QUEEN | ROOK | BISHOP | KNIGHT-> PROMOTE_*
+    MOVE <col> <row> [TO] <col> <row> [QUEEN|ROOK|BISHOP|KNIGHT] -> MoveCommand
+
+* ``match_status(text)`` informa se o texto e um comando COMPLETO, um PREFIXO valido
+  (ex.: "option", "level", "move e two") que precisa esperar a proxima palavra, ou INVALIDO.
+"""
+
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -25,7 +49,7 @@ class ActionCommand:
 
 @dataclass(frozen=True)
 class LevelCommand:
-    """Difficulty selection (1-10), e.g. "level three" or "level 10"."""
+    """Difficulty selection (1-10), e.g. "level three"."""
 
     level: int
 
@@ -35,206 +59,66 @@ class LevelCommand:
 
 Command = MoveCommand | ActionCommand | LevelCommand
 
-DIGITS = dict(zip("one two three four five six seven eight".split(), "12345678", strict=True))
-LEVEL_DIGITS = {
-    **DIGITS,
-    "nine": "9",
-    "ten": "10",
+COMPLETE, PREFIX, INVALID = "complete", "prefix", "invalid"
+
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
 }
+DIGITS = {w: str(n) for w, n in NUMBER_WORDS.items() if n <= 8}   # linhas do tabuleiro
+LEVEL_DIGITS = {w: str(n) for w, n in NUMBER_WORDS.items()}
 VALID_LEVEL_STRS = {str(i) for i in range(1, 11)}
+_DIGIT_TO_WORD = {str(n): w for w, n in NUMBER_WORDS.items()}
 
-# English letters and NATO phonetic alphabet
+# Colunas: letras e alfabeto NATO
 COLUMNS = {
-    # Letters
-    "a": "a",
-    "ay": "a",
-    "b": "b",
-    "bee": "b",
-    "c": "c",
-    "see": "c",
-    "d": "d",
-    "dee": "d",
-    "e": "e",
-    "ee": "e",
-    "f": "f",
-    "eff": "f",
-    "g": "g",
-    "gee": "g",
-    "h": "h",
-    # NATO phonetic alphabet
-    "alpha": "a",
-    "bravo": "b",
-    "charlie": "c",
-    "delta": "d",
-    "echo": "e",
-    "foxtrot": "f",
-    "golf": "g",
-    "hotel": "h",
+    "a": "a", "ay": "a", "alpha": "a",
+    "b": "b", "bee": "b", "bravo": "b",
+    "c": "c", "see": "c", "charlie": "c",
+    "d": "d", "dee": "d", "delta": "d",
+    "e": "e", "ee": "e", "echo": "e",
+    "f": "f", "eff": "f", "foxtrot": "f",
+    "g": "g", "gee": "g", "golf": "g",
+    "h": "h", "hotel": "h",
 }
+PROMO_PIECES = {"queen": "q", "rook": "r", "bishop": "b", "knight": "n"}
 
+# Frases canonicas (usadas pelo validator e pela documentacao)
 ACTIONS = {
-    "NEW_GAME": (
-        "start new game",
-        "start game",
-        "new game",
-        "play new game",
-        "start new",
-        "start",
-        "play",
-    ),
-    "RESUME_GAME": (
-        "resume game",
-        "resume",
-        "continue game",
-        "continue",
-    ),
-    "RESIGN_GAME": (
-        "resign game",
-        "resign",
-        "surrender",
-    ),
-    "VALIDATE_MOVE": (
-        "validate",
-        "validate move",
-        "check move",
-        "verify move",
-        "verify",
-    ),
-    "REPEAT_MOVE": (
-        "repeat",
-        "repeat move",
-        "repeat last move",
-        "try again",
-        "redo",
-        "redo move",
-    ),
-    "MODE_PVP": (
-        "option 1",
-        "option one",
-        "pvp",
-        "p v p",
-        "player versus player",
-        "player vs player",
-        "two players",
-        "versus player",
-        "multiplayer",
-    ),
-    "MODE_PVE": (
-        "option 2",
-        "option two",
-        "pve",
-        "p v e",
-        "player versus engine",
-        "player vs engine",
-        "versus engine",
-        "player versus computer",
-        "player versus machine",
-        "against computer",
-        "against engine",
-        "single player",
-        "engine",
-        "machine",
-    ),
-    "MODE_MANUAL": (
-        "manual",
-        "manual mode",
-        "hand mode",
-    ),
-    "MODE_VOICE": (
-        "voice",
-        "voice mode",
-        "automatic",
-        "gantry mode",
-    ),
-    "COLOR_WHITE": (
-        "white",
-        "play white",
-        "white pieces",
-        "color white",
-    ),
-    "COLOR_BLACK": (
-        "black",
-        "play black",
-        "black pieces",
-        "color black",
-    ),
-    "PROMOTE_QUEEN": (
-        "queen",
-        "promote queen",
-        "promote to queen",
-        "choose queen",
-        "play queen",
-        "queen please",
-    ),
-    "PROMOTE_ROOK": (
-        "rook",
-        "tower",
-        "promote rook",
-        "promote to rook",
-        "play rook",
-        "choose rook",
-        "rook please",
-    ),
-    "PROMOTE_BISHOP": (
-        "bishop",
-        "promote bishop",
-        "promote to bishop",
-        "play bishop",
-        "choose bishop",
-        "bishop please",
-    ),
-    "PROMOTE_KNIGHT": (
-        "knight",
-        "horse",
-        "promote knight",
-        "promote to knight",
-        "promote horse",
-        "play knight",
-        "choose knight",
-        "knight please",
-    ),
-    "CANCEL": (
-        "cancel",
-        "cancel move",
-        "cancel promotion",
-        "abort",
-        "back",
-    ),
+    "NEW_GAME": ("start game", "start new game"),
+    "RESIGN_GAME": ("resign", "resign game"),
+    "VALIDATE_MOVE": ("validate",),
+    "REPEAT_MOVE": ("repeat",),
+    "MODE_PVP": ("option one",),
+    "MODE_PVE": ("option two",),
+    "COLOR_WHITE": ("white",),
+    "COLOR_BLACK": ("black",),
+    "PROMOTE_QUEEN": ("queen",),
+    "PROMOTE_ROOK": ("rook",),
+    "PROMOTE_BISHOP": ("bishop",),
+    "PROMOTE_KNIGHT": ("knight",),
+    "CANCEL": ("cancel",),
+}
+_SINGLE_WORD = {
+    "white": "COLOR_WHITE",
+    "black": "COLOR_BLACK",
+    "validate": "VALIDATE_MOVE",
+    "repeat": "REPEAT_MOVE",
+    "cancel": "CANCEL",
+    "queen": "PROMOTE_QUEEN",
+    "rook": "PROMOTE_ROOK",
+    "bishop": "PROMOTE_BISHOP",
+    "knight": "PROMOTE_KNIGHT",
 }
 
-# Comandos que executam imediatamente apos "MAGNUS <COMANDO>" sem exigir confirmacao YES/NO.
-# Caso mude de ideia e queira exigir confirmacao (YES/NO) nos comandos de menu,
-# basta deixar apenas {"VALIDATE_MOVE"} abaixo e mudar IMMEDIATE_LEVEL para False:
-# IMMEDIATE_ACTIONS = {"VALIDATE_MOVE"}
-IMMEDIATE_ACTIONS = {
-    "VALIDATE_MOVE",
-    "REPEAT_MOVE",
-    "NEW_GAME",
-    "MODE_PVP",
-    "MODE_PVE",
-    "MODE_MANUAL",
-    "MODE_VOICE",
-    "COLOR_WHITE",
-    "COLOR_BLACK",
-    "PROMOTE_QUEEN",
-    "PROMOTE_ROOK",
-    "PROMOTE_BISHOP",
-    "PROMOTE_KNIGHT",
-    "CANCEL",
-}
+# Todos os comandos validos executam direto (sem YES/NO)
+IMMEDIATE_ACTIONS = set(ACTIONS)
 IMMEDIATE_LEVEL = True
 
-MOVE_WORDS = {"move", "play"}
-LEVEL_WORDS = {"level", "difficulty"}
+MOVE_WORDS = {"move"}
+LEVEL_WORDS = {"level"}
 OPTION_WORDS = {"option"}
-FILLERS = {
-    "from",
-    "to",
-    "the",
-    "at",
-    "on",
-    "square",
-}
+FILLERS = {"to"}
 
 YES = {"yes", "yeah", "yep", "confirm", "correct"}
 NO = {"no", "nope", "cancel", "negative"}
@@ -246,73 +130,109 @@ def normalize(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9\s]", " ", text).split())
 
 
-def parse(text: str, language: str | None = None) -> tuple[Command | None, str | None]:
-    """
-    Interpreta o texto ouvido. Primeiro tenta o texto inteiro como comando; se falhar,
-    procura um comando em QUALQUER ponto do texto (ignorando palavras ao redor, ex.:
-    "please start new game", "ok move e two e four"). Em caso de varios candidatos,
-    vence o trecho mais longo (e, em empate, o mais a esquerda).
-    """
-    command, reason = _parse_exact(text, language)
-    if command is not None:
-        return command, None
-    tokens = normalize(text).split()
-    n = len(tokens)
-    for length in range(n - 1, 0, -1):
-        for start in range(0, n - length + 1):
-            window = " ".join(tokens[start:start + length])
-            found, _ = _parse_exact(window, language)
-            if found is not None:
-                return found, None
-    return None, reason
-
-
-def _parse_exact(text: str, language: str | None = None) -> tuple[Command | None, str | None]:
-    text = normalize(text)
-    if not text:
-        return None, "Received empty transcript."
-    for action, phrases in ACTIONS.items():
-        if text in phrases:
-            return ActionCommand(action), None
-    tokens = text.split()
-    if tokens[0] in OPTION_WORDS:
-        rest = [DIGITS.get(t, t) for t in tokens[1:] if t not in FILLERS]
-        if rest == ["1"]:
-            return ActionCommand("MODE_PVP"), None
-        if rest == ["2"]:
-            return ActionCommand("MODE_PVE"), None
-        return None, "Expected option 1 or 2."
-    if tokens[0] in LEVEL_WORDS:
-        rest = [LEVEL_DIGITS.get(t, t) for t in tokens[1:] if t not in FILLERS]
-        if len(rest) == 1 and rest[0] in VALID_LEVEL_STRS:
-            return LevelCommand(int(rest[0])), None
-        return None, "Expected a difficulty level from 1 to 10."
-    if tokens[0] not in MOVE_WORDS:
-        return None, "No recognised command keyword."
-    tokens = [DIGITS.get(t, COLUMNS.get(t, t)) for t in tokens[1:] if t not in FILLERS]
-    squares = []
-    promo_piece = None
-    promo_map = {
-        "queen": "q",
-        "rook": "r",
-        "tower": "r",
-        "bishop": "b",
-        "knight": "n",
-        "horse": "n",
-    }
-    while tokens:
-        token = tokens.pop(0)
-        if re.fullmatch(r"[a-h][1-8]", token):
-            squares.append(token.upper())
-        elif token in {*"abcdefgh", "8"} and tokens and tokens[0] in set("12345678"):
-            squares.append(("h" if token == "8" else token).upper() + tokens.pop(0))
-        elif len(squares) == 2 and token in promo_map and promo_piece is None:
-            promo_piece = promo_map[token]
+def _tokens(text: str) -> list[str]:
+    """Normaliza, descarta [unk] e expande atalhos digitados (e2 -> e two, 3 -> three)."""
+    out: list[str] = []
+    for tok in normalize(text).split():
+        if tok == "unk":
+            continue
+        if re.fullmatch(r"[a-h][1-8]", tok):
+            out += [tok[0], _DIGIT_TO_WORD[tok[1]]]
+        elif tok in _DIGIT_TO_WORD:
+            out.append(_DIGIT_TO_WORD[tok])
         else:
-            return None, "Expected exactly two chess squares without ambiguous words."
-    if len(squares) != 2:
-        return None, "Expected exactly two chess squares."
-    return MoveCommand(squares[0], squares[1], promotion=promo_piece), None
+            out.append(tok)
+    return out
+
+
+def _match_move(rest: list[str]):
+    i = 0
+    squares = []
+    for k in range(2):
+        if k == 1 and i < len(rest) and rest[i] in ("to", "two"):
+            i += 1                                   # "to" (ou "two" ouvido no lugar de "to")
+        if i >= len(rest):
+            return PREFIX, None, "Waiting for the square."
+        col = COLUMNS.get(rest[i])
+        if col is None:
+            return INVALID, None, f"Expected a column (A-H), heard {rest[i]!r}."
+        i += 1
+        if i >= len(rest):
+            return PREFIX, None, "Waiting for the row."
+        row = DIGITS.get(rest[i])
+        if row is None:
+            return INVALID, None, f"Expected a row (one-eight), heard {rest[i]!r}."
+        i += 1
+        squares.append(col.upper() + row)
+    promo = None
+    if i < len(rest):
+        promo = PROMO_PIECES.get(rest[i])
+        if promo is None or i + 1 != len(rest):
+            return INVALID, None, f"Unexpected words after the move: {' '.join(rest[i:])!r}."
+    if squares[0] == squares[1]:
+        return INVALID, None, "Source and destination are the same square."
+    return COMPLETE, MoveCommand(squares[0], squares[1], promotion=promo), None
+
+
+def _match(tokens: list[str]):
+    if not tokens:
+        return PREFIX, None, "Empty transcript."
+    head, rest = tokens[0], tokens[1:]
+
+    if head == "start":
+        if rest in ([], ["new"]):
+            return PREFIX, None, "Waiting for 'game'."
+        if rest in (["game"], ["new", "game"]):
+            return COMPLETE, ActionCommand("NEW_GAME"), None
+        return INVALID, None, "Expected 'start new game'."
+
+    if head == "option":
+        if not rest:
+            return PREFIX, None, "Waiting for 'one' or 'two'."
+        if rest == ["one"]:
+            return COMPLETE, ActionCommand("MODE_PVP"), None
+        if rest == ["two"]:
+            return COMPLETE, ActionCommand("MODE_PVE"), None
+        return INVALID, None, "Expected 'option one' or 'option two'."
+
+    if head == "level":
+        if not rest:
+            return PREFIX, None, "Waiting for the level (one-ten)."
+        if len(rest) == 1 and rest[0] in NUMBER_WORDS:
+            return COMPLETE, LevelCommand(NUMBER_WORDS[rest[0]]), None
+        return INVALID, None, "Expected a difficulty level from one to ten."
+
+    if head == "resign":
+        if rest in ([], ["game"]):
+            return COMPLETE, ActionCommand("RESIGN_GAME"), None
+        return INVALID, None, "Expected 'resign'."
+
+    if head in _SINGLE_WORD:
+        if not rest:
+            return COMPLETE, ActionCommand(_SINGLE_WORD[head]), None
+        return INVALID, None, f"Unexpected words after {head!r}."
+
+    if head == "move":
+        return _match_move(rest)
+
+    return INVALID, None, f"Unknown command word {head!r}."
+
+
+def match_status(text: str) -> str:
+    """COMPLETE, PREFIX (esperar proxima palavra) ou INVALID."""
+    return _match(_tokens(text))[0]
+
+
+def parse(text: str, language: str | None = None) -> tuple[Command | None, str | None]:
+    tokens = _tokens(text)
+    if not tokens:
+        return None, "Received empty transcript."
+    status, command, reason = _match(tokens)
+    if status == COMPLETE:
+        return command, None
+    if status == PREFIX:
+        return None, f"Incomplete command: {reason}"
+    return None, reason
 
 
 def parse_confirmation(text: str | None, language: str | None = None) -> bool | None:
@@ -324,23 +244,16 @@ def parse_confirmation(text: str | None, language: str | None = None) -> bool | 
     return None
 
 
+def command_vocabulary() -> set[str]:
+    words = {"start", "new", "game", "option", "level", "resign", "move", "to"}
+    words |= set(_SINGLE_WORD) | set(NUMBER_WORDS) | set(COLUMNS)
+    return words
+
+
 def grammar(stage: str, language: str = "en-US") -> list[str]:
-    if stage == "wake":
-        return ["magnus", "[unk]"]
     if stage == "confirmation":
         return sorted(YES | NO | {"[unk]"})
-    words = (
-        MOVE_WORDS
-        | LEVEL_WORDS
-        | OPTION_WORDS
-        | FILLERS
-        | set(LEVEL_DIGITS)
-        | set(COLUMNS)
-        | set("abcdefgh")
-    )
-    words |= {word for phrases in ACTIONS.values() for phrase in phrases for word in phrase.split()}
-    # Remove digitos (ex: '1' a '10') e siglas nao foneticas ('pvp', 'pve') que nao
-    # constam no dicionario fonetico do Vosk. O Vosk reconhece palavras faladas
-    # ('one', 'two', 'three', 'p v p', etc.), que o parser traduz para comandos.
-    words = {w for w in words if not any(c.isdigit() for c in w) and w not in {"pvp", "pve"}}
-    return sorted(words | {"[unk]"})
+    words = command_vocabulary() | {"[unk]"}
+    if stage == "wake":
+        words.add("magnus")
+    return sorted(words)

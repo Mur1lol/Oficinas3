@@ -6,6 +6,10 @@ from loguru import logger
 from .audio_capture import AudioStream
 from .config import Settings
 from .parser import (
+    COMPLETE,
+    INVALID,
+    PREFIX,
+    match_status,
     ActionCommand,
     Command,
     IMMEDIATE_ACTIONS,
@@ -91,13 +95,24 @@ class VoiceCommandPipeline:
     def _cycle(self, stream):
         stream.discard_pending()
         self._set_state(PipelineState.WAKE_WORD_LISTEN)
+        rest = ""
         if self.wake is not None:
             self.wake.wait(stream)
-        elif self.recognizer.listen(stream, "wake", None) is None:
-            return self._failure(None, "Wake word not detected", wake_detected=False)
-        stream.discard_pending()
+        else:
+            heard = self.recognizer.listen(stream, "wake", None)
+            if heard is None:
+                return self._failure(None, "Wake word not detected", wake_detected=False)
+            rest = heard.split(" ", 1)[1] if " " in heard else ""
         self._set_state(PipelineState.COMMAND_LISTEN)
-        text = self.recognizer.listen(stream, "command", self.settings.command_timeout)
+        status = match_status(rest) if rest else INVALID
+        if status == COMPLETE:
+            text = rest                                   # "magnus <comando>" dito de uma vez
+        elif status == PREFIX:
+            # Ja veio um prefixo junto com "magnus" (ex.: "magnus option");
+            # continua ouvindo para completar as palavras restantes.
+            text = self.recognizer.listen(stream, "command", self.settings.command_timeout, initial=rest)
+        else:
+            text = self.recognizer.listen(stream, "command", self.settings.command_timeout)
         if not text:
             logger.warning("[VOZ] Nenhum comando ouvido (timeout de {}s)", self.settings.command_timeout)
             return self._failure(None, "Command timed out", wake_detected=True)
@@ -116,7 +131,7 @@ class VoiceCommandPipeline:
             return self._failure(command, "Command not allowed in current state", wake_detected=True)
 
         # Comandos validos sao executados imediatamente sem exigir confirmacao YES/NO
-        logger.info("[VOZ] ENTENDI: {} -> EXECUTANDO", command)
+        logger.success("[VOZ] ENTENDI: {} -> EXECUTANDO", command)
         stream.check()
         self._set_state(PipelineState.EMIT, command)
         return VoiceResult(command, confirmed=True, wake_detected=True)
