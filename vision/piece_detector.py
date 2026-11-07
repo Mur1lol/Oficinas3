@@ -382,6 +382,16 @@ class PieceDetector:
                 else 1.45
             )
 
+            # Check if the expected destination piece in post_move is missing (piece dropped mid-way)
+            dest_missing = (
+                prior_mode == "post_move"
+                and any(
+                    prior_map.get(u) is not None and not results[u].occupied
+                    for u in unbiased
+                    if u in results
+                )
+            )
+
             # 2. Apply per-square prior hysteresis & stricter empty-square gate
             for sq, a in results.items():
                 if sq in unbiased:
@@ -407,7 +417,7 @@ class PieceDetector:
                 else:
                     # Square was empty in prior_board: reject weak reflections/shadows
                     if a.occupied:
-                        if prior_mode == "post_move":
+                        if prior_mode == "post_move" and not dest_missing:
                             min_req = max(1.40, min(1.85, 0.60 * median_occ))
                             min_puck = self._struct_thresh * 0.85
                         else:
@@ -419,7 +429,7 @@ class PieceDetector:
             # 3. In a single move from prior_board, at most 1 previously-empty square
             #    becomes occupied (or 2 on rank 1/8 during castling). Suppress weaker
             #    false-positive empty squares when a stronger destination square exists.
-            if prior_mode in ("pre_move", "auto"):
+            if prior_mode in ("pre_move", "auto") or dest_missing:
                 new_occupied = [
                     a for sq, a in results.items()
                     if prior_map.get(sq) is None and a.occupied and sq not in unbiased
@@ -429,7 +439,8 @@ class PieceDetector:
                     best_new = new_occupied[0]
                     # Allow a 2nd square only if both are back-rank castling squares with comparable scores
                     is_castling_pair = (
-                        len(new_occupied) >= 2
+                        not dest_missing
+                        and len(new_occupied) >= 2
                         and best_new.square[1] in ("1", "8")
                         and new_occupied[1].square[1] == best_new.square[1]
                         and new_occupied[1].occ_score >= 0.72 * best_new.occ_score

@@ -387,6 +387,36 @@ class MovePlanner:
         if self.return_home:
             self._navigate_phys(self.home_phys())
 
+    def plan_recovery(self, from_sq_name: str, to_sq_name: str) -> Plan:
+        """
+        Planeja um movimento corretivo quando a camera identifica que a peca
+        parou em ``from_sq_name`` (ex.: meio do caminho ou casa de origem) antes de
+        chegar em ``to_sq_name``. O Gantry vai direto ate ``from_sq_name``, pega a
+        peca e leva ate ``to_sq_name``, sem repetir etapas ja concluidas (como capturas).
+        """
+        from_sq = chess.parse_square(from_sq_name.lower())
+        to_sq = chess.parse_square(to_sq_name.lower())
+        src_cell = square_to_cell(from_sq)
+        dst_cell = square_to_cell(to_sq)
+
+        self._steps = []
+        self.carrying = False
+        self._rebuild()
+        # No estado fisico atual, a peca esta em src_cell e dst_cell ainda esta vazia
+        self.logic.grid[dst_cell[0]][dst_cell[1]] = EMPTY
+        self.logic.grid[src_cell[0]][src_cell[1]] = PIECE
+
+        if self.return_home:
+            self.robot_phys = self.home_phys()
+            self._emit(0.0, 0.0, 0)
+
+        self._carry(src_cell, dst_cell)
+        self.carrying = False
+        self._rebuild()
+        if self.return_home:
+            self._navigate_phys(self.home_phys())
+        return Plan(list(self._steps))
+
     def plan_reorganize(self, color: bool | None = None) -> Plan:
         """
         Organiza as pecas de volta as casas iniciais.

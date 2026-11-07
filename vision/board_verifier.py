@@ -167,6 +167,7 @@ class PositionVerificationResult:
     origin_ok: bool = True
     dest_ok: bool = True
     color_ok: bool = True
+    stopped_square: Optional[str] = None
     mismatches: list[dict] = field(default_factory=list)
     matching_squares: int = 64
     confidence: float = 1.0
@@ -182,6 +183,7 @@ class PositionVerificationResult:
             "origin_ok": self.origin_ok,
             "dest_ok": self.dest_ok,
             "color_ok": self.color_ok,
+            "stopped_square": self.stopped_square,
             "mismatches": self.mismatches,
             "matching_squares": self.matching_squares,
             "confidence": round(self.confidence, 3),
@@ -295,6 +297,34 @@ def verify_board_position(
     matching_squares = 64 - len(mismatches)
     move_uci = last_move.uci().upper() if last_move else None
 
+    # Identifica onde a peca parou caso nao tenha chegado ao destino (dest_ok == False)
+    stopped_square: Optional[str] = None
+    if last_move is not None and not dest_ok and to_name:
+        if not origin_ok and from_name:
+            stopped_square = from_name
+        else:
+            dropped_cands = [
+                m["square"]
+                for m in non_move_mismatches
+                if m["expected"] == "empty" and m["observed"] != "empty"
+            ]
+            if dropped_cands:
+                to_sq_idx = last_move.to_square
+                from_sq_idx = last_move.from_square
+
+                def _drop_rank(sq_n: str) -> tuple[float, int]:
+                    st_sq = state.board.get(sq_n)
+                    conf = st_sq.confidence if st_sq else 0.0
+                    idx = chess.parse_square(sq_n.lower())
+                    dist = chess.square_distance(idx, to_sq_idx) + chess.square_distance(idx, from_sq_idx)
+                    return (-dist, round(conf * 1000))
+
+                stopped_square = max(dropped_cands, key=_drop_rank)
+                # Preenche o tipo da peca na casa onde ela parou para exibicao visual
+                dest_piece = board.piece_at(last_move.to_square)
+                if dest_piece and stopped_square in state.board:
+                    state.board[stopped_square].piece = PIECE_NAME_EN.get(dest_piece.piece_type)
+
     if success:
         if last_move:
             msg = f"Posição confirmada após {from_name}→{to_name} ({matching_squares}/64 casas conferem)."
@@ -305,27 +335,47 @@ def verify_board_position(
         speech = ""
     else:
         issues = []
-        if not origin_ok and from_name:
-            issues.append(f"origem {from_name} continua ocupada")
-        if not dest_ok and to_name:
-            issues.append(f"destino {to_name} está vazio")
-        elif not color_ok and to_name:
-            issues.append(f"cor incorreta em {to_name}")
-        if non_move_mismatches:
-            sq_list = ", ".join(m["square"] for m in non_move_mismatches[:5])
+        if stopped_square and to_name:
+            if stopped_square == from_name:
+                issues.append(f"peça permaneceu na origem {from_name} (destino {to_name} vazio)")
+            else:
+                issues.append(f"peça parou em {stopped_square} no caminho até {to_name}")
+        else:
+            if not origin_ok and from_name:
+                issues.append(f"origem {from_name} continua ocupada")
+            if not dest_ok and to_name:
+                issues.append(f"destino {to_name} está vazio")
+            elif not color_ok and to_name:
+                issues.append(f"cor incorreta em {to_name}")
+        extra_mismatches = [m for m in non_move_mismatches if m["square"] != stopped_square]
+        if extra_mismatches:
+            sq_list = ", ".join(m["square"] for m in extra_mismatches[:5])
             issues.append(f"divergência em {sq_list}")
         msg = "Divergência na verificação: " + "; ".join(issues) + "."
-        speech = (
-            "Warning. Board position mismatch detected. "
-            "Say Magnus Repeat to repeat the gantry move, or adjust the piece and say Magnus Validate."
-        )
-        bad_sq = mismatches[0]["square"] if mismatches else "BOARD"
-        lcd = (
-            "CAMERA WARNING!",
-            f"CHECK SQUARE {bad_sq}",
-            "SAY: MAGNUS VALIDATE",
-            "OR MAGNUS REPEAT",
-        )
+        if stopped_square and to_name:
+            speech = (
+                f"Warning. Piece stopped at {_spoken_sq(stopped_square)} instead of {_spoken_sq(to_name)}. "
+                f"Say Magnus Repeat to move it from {_spoken_sq(stopped_square)} to {_spoken_sq(to_name)}, "
+                "or adjust the piece and say Magnus Validate."
+            )
+            lcd = (
+                "CAMERA WARNING!",
+                f"STOPPED: {stopped_square}->{to_name}",
+                "SAY: MAGNUS REPEAT",
+                "OR MAGNUS VALIDATE",
+            )
+        else:
+            speech = (
+                "Warning. Board position mismatch detected. "
+                "Say Magnus Repeat to repeat the gantry move, or adjust the piece and say Magnus Validate."
+            )
+            bad_sq = mismatches[0]["square"] if mismatches else "BOARD"
+            lcd = (
+                "CAMERA WARNING!",
+                f"CHECK SQUARE {bad_sq}",
+                "SAY: MAGNUS VALIDATE",
+                "OR MAGNUS REPEAT",
+            )
 
     return PositionVerificationResult(
         success=success,
@@ -333,6 +383,7 @@ def verify_board_position(
         origin_ok=origin_ok,
         dest_ok=dest_ok,
         color_ok=color_ok,
+        stopped_square=stopped_square,
         mismatches=mismatches,
         matching_squares=matching_squares,
         confidence=state.overall_confidence,
@@ -728,6 +779,13 @@ def annotate_validation_image(
                 (mx + 5, my + sq_sz - 8),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 40, 255), 2,
             )
+        if verify_result.stopped_square and verify_result.move_uci and len(verify_result.move_uci) >= 4:
+            to_sq_name = verify_result.move_uci[2:4].upper()
+            sx, sy = sq_xy(verify_result.stopped_square)
+            tx, ty = sq_xy(to_sq_name)
+            p1 = (sx + sq_sz // 2, sy + sq_sz // 2)
+            p2 = (tx + sq_sz // 2, ty + sq_sz // 2)
+            cv2.arrowedLine(annotated, p1, p2, (0, 180, 255), 3, tipLength=0.22)
 
     return annotated
 

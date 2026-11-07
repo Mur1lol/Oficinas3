@@ -1201,11 +1201,35 @@ class VoiceChessGame:
                     if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
                         break
                     if isinstance(cmd, ActionCommand) and cmd.action == "REPEAT_MOVE":
-                        self.lcd.show(*lines)
-                        self.speaker.say("Repeating last gantry move.", wait=False)
+                        to_sq_name = chess.square_name(move.to_square).upper()
+                        stopped_sq = getattr(ver, "stopped_square", None)
+                        if stopped_sq and stopped_sq != to_sq_name:
+                            try:
+                                recovery_plan = self.planner.plan_recovery(stopped_sq, to_sq_name)
+                                spoken_from = " ".join(stopped_sq)
+                                spoken_to = " ".join(to_sq_name)
+                                self.lcd.show(
+                                    "RECOVERING MOVE",
+                                    f"FROM {stopped_sq} TO {to_sq_name}",
+                                    "GANTRY MOVING...",
+                                    "",
+                                )
+                                self.speaker.say(
+                                    f"Continuing move from {spoken_from} to {spoken_to}.",
+                                    wait=False,
+                                )
+                            except PlanningError:
+                                recovery_plan = plan
+                                self.lcd.show(*lines)
+                                self.speaker.say("Repeating last gantry move.", wait=False)
+                        else:
+                            recovery_plan = plan
+                            self.lcd.show(*lines)
+                            self.speaker.say("Repeating last gantry move.", wait=False)
+
                         self.leds.set(side, "green")
                         try:
-                            self.gantry.execute(plan.x, plan.y, plan.eletroima)
+                            self.gantry.execute(recovery_plan.x, recovery_plan.y, recovery_plan.eletroima)
                         except GantryError as exc:
                             self.planner.rollback()
                             self.leds.off(side)
