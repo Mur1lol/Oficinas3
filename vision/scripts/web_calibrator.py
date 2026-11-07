@@ -1156,7 +1156,10 @@ class WebCalibratorApp:
     # ── deteccao ────────────────────────────────────────────────────────────
 
     def _capture_board_state(
-        self, threshold: float = cfg.OCCUPIED_DIFF_THRESHOLD
+        self,
+        threshold: float = cfg.OCCUPIED_DIFF_THRESHOLD,
+        prior_mode: str = "auto",
+        unbiased_squares: Optional[set[str] | list[str] | tuple[str, ...]] = None,
     ) -> tuple[Optional[np.ndarray], Optional[BoardState], Optional[str], Optional[str]]:
         """Captura o frame atual, corrige a perspectiva e retorna (warped, BoardState, orientation, error)."""
         cal = self._saved_calibration()
@@ -1172,7 +1175,13 @@ class WebCalibratorApp:
         )
         segmenter = BoardSegmenter(board_orientation=orientation)
         squares = segmenter.segment_board(warped)
-        board_analyses = detector.analyze_all(squares)
+        prior_b = None if prior_mode == "cap_only" else self.logical_board
+        board_analyses = detector.analyze_all(
+            squares,
+            prior_board=prior_b,
+            prior_mode=prior_mode,
+            unbiased_squares=unbiased_squares,
+        )
 
         board_dict = {
             sq: SquareState(
@@ -1210,9 +1219,13 @@ class WebCalibratorApp:
         clf = detector._classifier
         mode = "off" if clf is None else ("samples" if clf.has_samples else "icons")
 
+        board_analyses = detector.analyze_all(
+            squares,
+            prior_board=self.logical_board,
+            prior_mode="auto",
+        )
         found, confidences = [], []
-        for name, roi in squares.items():
-            a = detector.analyze_square(name, roi)
+        for name, a in board_analyses.items():
             confidences.append(a.confidence)
             if not a.occupied:
                 continue
@@ -1330,7 +1343,7 @@ class WebCalibratorApp:
 
         if action == "sync_from_camera":
             thresh = float(data.get("threshold", cfg.OCCUPIED_DIFF_THRESHOLD))
-            _, state, _, err = self._capture_board_state(thresh)
+            _, state, _, err = self._capture_board_state(thresh, prior_mode="cap_only")
             if err or state is None:
                 return {"success": False, "error": err or "Falha na captura."}
             new_board = chess.Board(None)
@@ -1357,7 +1370,9 @@ class WebCalibratorApp:
     def simulate_magnus_validate(
         self, threshold: float = cfg.OCCUPIED_DIFF_THRESHOLD, auto_apply: bool = True
     ) -> dict:
-        warped, state, orientation, err = self._capture_board_state(threshold)
+        warped, state, orientation, err = self._capture_board_state(
+            threshold, prior_mode="pre_move"
+        )
         if err or warped is None or state is None:
             return {"success": False, "error": err or "Falha ao capturar imagem."}
 
@@ -1390,11 +1405,16 @@ class WebCalibratorApp:
     def simulate_verify_position(
         self, threshold: float = cfg.OCCUPIED_DIFF_THRESHOLD
     ) -> dict:
-        warped, state, orientation, err = self._capture_board_state(threshold)
-        if err or warped is None or state is None:
-            return {"success": False, "error": err or "Falha ao capturar imagem."}
-
         last_move = chess.Move.from_uci(self.last_move_uci) if self.last_move_uci else None
+        unbiased = None
+        if last_move is not None:
+            unbiased = {
+                chess.square_name(last_move.from_square).upper(),
+                chess.square_name(last_move.to_square).upper(),
+            }
+        warped, state, orientation, err = self._capture_board_state(
+            threshold, prior_mode="post_move", unbiased_squares=unbiased
+        )
         res = verify_board_position(self.logical_board, state, last_move=last_move)
         annotated = annotate_validation_image(
             warped, state, orientation=orientation or "normal", verify_result=res

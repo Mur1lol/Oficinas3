@@ -400,6 +400,7 @@ class PieceClassifier:
         roi: np.ndarray,
         color: Optional[str],
         center: Optional[tuple[int, int]] = None,
+        expected_piece: Optional[str] = None,
     ) -> tuple[Optional[str], float]:
         icon, _ = _extract_icon(roi, color=color, center=center)
         search = icon[_SEARCH_BOX[0]:_SEARCH_BOX[1], _SEARCH_BOX[0]:_SEARCH_BOX[1]]
@@ -413,7 +414,10 @@ class PieceClassifier:
             scores[ptype] = best
 
         if not scores:
-            return None, 0.0
+            return (expected_piece, 0.72) if expected_piece in _PIECE_TYPES else (None, 0.0)
+
+        if expected_piece in scores:
+            scores[expected_piece] = min(1.0, scores[expected_piece] + 0.12)
 
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         best_type, best = ranked[0]
@@ -421,6 +425,8 @@ class PieceClassifier:
         margin = best - second
         confidence = float(np.clip(0.6 * best + 2.0 * margin, 0.0, 1.0))
         if best < cfg.PIECE_SAMPLE_MIN_SCORE or margin < cfg.PIECE_SAMPLE_MIN_MARGIN:
+            if expected_piece in _PIECE_TYPES:
+                return expected_piece, max(confidence, 0.72)
             return None, confidence
         return best_type, confidence
 
@@ -442,17 +448,19 @@ class PieceClassifier:
         roi: np.ndarray,
         color: Optional[str] = None,
         center: Optional[tuple[int, int]] = None,
+        expected_piece: Optional[str] = None,
     ) -> tuple[Optional[str], float]:
         """
         Returns ``(piece_type, confidence)``; ``(None, 0.0)`` when unsure.
 
         ``color`` restricts matching to that colour's references (recommended);
         if None, all references are searched.
+        ``expected_piece`` applies a Bayesian prior boost toward the expected piece type.
         """
         if self.has_samples:
-            return self._classify_samples(roi, color, center=center)
+            return self._classify_samples(roi, color, center=center, expected_piece=expected_piece)
         if not self.is_ready:
-            return None, 0.0
+            return (expected_piece, 0.72) if expected_piece in _PIECE_TYPES else (None, 0.0)
 
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
         if center is None:
@@ -474,13 +482,20 @@ class PieceClassifier:
                 scores[ptype] = max(scores.get(ptype, -1.0),
                                     self._score(roi_edges, variants))
 
+        if expected_piece in scores:
+            scores[expected_piece] = min(1.0, scores[expected_piece] + 0.10)
+
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         (best_type, best), (_, second) = ranked[0], ranked[1]
         if best < cfg.PIECE_TYPE_MIN_SCORE:
+            if expected_piece in _PIECE_TYPES:
+                return expected_piece, 0.72
             return None, max(0.0, best)
 
         margin = best - second
         confidence = float(np.clip(0.5 * best + 2.5 * margin, 0.0, 1.0))
         if margin < cfg.PIECE_TYPE_MIN_MARGIN:
+            if expected_piece in _PIECE_TYPES:
+                return expected_piece, max(confidence, 0.72)
             return None, confidence
         return best_type, confidence

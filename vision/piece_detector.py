@@ -91,6 +91,8 @@ class SquareAnalysis:
     mad:        float = 0.0
     variance:   float = 0.0
     center:     tuple[int, int] = (40, 40)
+    puck_score: float = 0.0
+    occ_score:  float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -100,6 +102,7 @@ class SquareAnalysis:
             "piece":      self.piece,
             "confidence": round(self.confidence, 4),
             "center":     list(self.center),
+            "occ_score":  round(self.occ_score, 4),
         }
 
 
@@ -177,6 +180,8 @@ class PieceDetector:
         square: str,
         roi: np.ndarray,
         ref_roi: np.ndarray | None = None,
+        expected_color: Optional[str] = None,
+        expected_piece: Optional[str] = None,
     ) -> SquareAnalysis:
         """
         Analyse a single square ROI.
@@ -190,6 +195,10 @@ class PieceDetector:
         ref_roi : np.ndarray | None
             Reference (empty) crop of the same square. If None and a
             reference image is stored, uses it automatically.
+        expected_color : str | None
+            Optional prior colour ("white" or "black") from logical board.
+        expected_piece : str | None
+            Optional prior piece type ("pawn", "rook", ...) from logical board.
 
         Returns
         -------
@@ -199,8 +208,8 @@ class PieceDetector:
             ref_roi = self._ref_squares[square]
 
         # ── Occupancy & dynamic center detection ──────────────────────
-        occupied, occ_confidence, mad, variance, center = self._detect_occupancy(
-            roi, ref_roi
+        occupied, occ_confidence, mad, variance, center, puck_score, occ_score = (
+            self._detect_occupancy(roi, ref_roi)
         )
 
         # ── Colour detection (centered on located puck) ───────────────
@@ -208,14 +217,26 @@ class PieceDetector:
         color_confidence = 1.0
         if occupied:
             color, color_confidence = self._detect_color(roi, center=center)
+            if (
+                expected_color in ("white", "black")
+                and color != expected_color
+                and color_confidence < 0.78
+            ):
+                color = expected_color
+                color_confidence = 0.78
 
         # ── Combined confidence ───────────────────────────────────────
         confidence = occ_confidence * color_confidence if occupied else occ_confidence
 
-        # ── Piece type (centered template matching) ───────────────────
+        # ── Piece type (centered template matching + prior bias) ──────
         piece: Optional[str] = None
         if occupied and self._classifier is not None:
-            piece, _ = self._classifier.classify(roi, color, center=center)
+            prior_p = expected_piece if (expected_color is None or color == expected_color) else None
+            piece, _ = self._classifier.classify(
+                roi, color, center=center, expected_piece=prior_p
+            )
+        elif occupied and expected_piece and (expected_color is None or color == expected_color):
+            piece = expected_piece
 
         return SquareAnalysis(
             square=square,
@@ -226,15 +247,23 @@ class PieceDetector:
             mad=mad,
             variance=variance,
             center=center,
+            puck_score=puck_score,
+            occ_score=occ_score,
         )
 
     def analyze_all(
         self,
         squares: dict[str, np.ndarray],
         ref_squares: dict[str, np.ndarray] | None = None,
+        prior_board: Optional[object] = None,
+        max_pieces: int = 32,
+        prior_mode: str = "auto",
+        unbiased_squares: Optional[set[str] | list[str] | tuple[str, ...]] = None,
     ) -> dict[str, SquareAnalysis]:
         """
-        Analyse all 64 board squares.
+        Analyse all 64 board squares, using the logical ``prior_board`` (when
+        available) and the finite piece-count limit (``max_pieces <= 32``) to
+        suppress false positives on empty squares and guide piece classification.
 
         Parameters
         ----------
@@ -242,17 +271,255 @@ class PieceDetector:
             From BoardSegmenter.segment_board().
         ref_squares : dict[str, np.ndarray] | None
             Reference ROIs. If None, extracted from self._ref automatically.
+        prior_board : chess.Board | None
+            Logical board state used as a Bayesian prior for piece locations,
+            piece count, colours, and types. If None and ``prior_mode == "auto"``,
+            loads ``logical_board_state.json`` if available.
+        max_pieces : int
+            Hard upper bound on total occupied squares on the board (default 32).
+        prior_mode : str
+            "auto" (default), "pre_move" (before manual move), "post_move" (after Gantry),
+            or "off" (disable prior board, apply only max_pieces cap).
+        unbiased_squares : collection[str] | None
+            Squares (e.g. Gantry move origin & destination) that must be evaluated
+            without occupancy prior hysteresis.
 
         Returns
         -------
         dict mapping square name to SquareAnalysis.
         """
+        if prior_board is None and prior_mode == "auto":
+            try:
+                import chess
+                from .board_verifier import load_logical_board_snapshot
+                snap = load_logical_board_snapshot()
+                if snap and snap.get("fen"):
+                    prior_board = chess.Board(snap["fen"])
+            except Exception:
+                prior_board = None
+
         results: dict[str, SquareAnalysis] = {}
         ref_map = ref_squares if ref_squares is not None else self._ref_squares
         for sq, roi in squares.items():
             ref_roi = ref_map.get(sq)
             results[sq] = self.analyze_square(sq, roi, ref_roi=ref_roi)
+
+        if prior_mode != "off":
+            self._apply_board_prior(
+                results,
+                squares,
+                prior_board=prior_board,
+                max_pieces=max_pieces,
+                prior_mode=prior_mode,
+                unbiased_squares=unbiased_squares,
+            )
         return results
+
+    def _apply_board_prior(
+        self,
+        results: dict[str, SquareAnalysis],
+        squares: dict[str, np.ndarray],
+        prior_board: Optional[object] = None,
+        max_pieces: int = 32,
+        prior_mode: str = "auto",
+        unbiased_squares: Optional[set[str] | list[str] | tuple[str, ...]] = None,
+    ) -> None:
+        """
+        In-place refinement of ``results`` using:
+        1. Expected occupancy hysteresis & empty-square noise suppression.
+        2. Single-turn empty-square entry constraint (at most 1 new square, or 2 in castling).
+        3. Global piece-count cap (``Top-N`` by occupancy score, where ``N <= 32``).
+        4. Prior-guided piece type & colour propagation from ``prior_board``.
+        """
+        import chess
+
+        type_names = {
+            chess.PAWN: "pawn",
+            chess.KNIGHT: "knight",
+            chess.BISHOP: "bishop",
+            chess.ROOK: "rook",
+            chess.QUEEN: "queen",
+            chess.KING: "king",
+        }
+        unbiased = {s.upper() for s in (unbiased_squares or ())}
+
+        prior_map: dict[str, tuple[str, str] | None] = {}
+        if prior_board is not None and hasattr(prior_board, "piece_at"):
+            for sq_idx in chess.SQUARES:
+                sq_name = chess.square_name(sq_idx).upper()
+                p = prior_board.piece_at(sq_idx)
+                if p is not None:
+                    c_str = "white" if p.color == chess.WHITE else "black"
+                    t_str = type_names.get(p.piece_type, "pawn")
+                    prior_map[sq_name] = (c_str, t_str)
+                else:
+                    prior_map[sq_name] = None
+
+        has_prior = bool(prior_map) and any(v is not None for v in prior_map.values())
+        n_expected = (
+            sum(1 for v in prior_map.values() if v is not None)
+            if has_prior
+            else max_pieces
+        )
+        cap_n = max(1, min(int(max_pieces), int(n_expected)))
+
+        def _clear_sq(a: SquareAnalysis) -> None:
+            a.occupied = False
+            a.color = None
+            a.piece = None
+            a.confidence = max(0.65, min(0.98, 1.0 - 0.25 * a.occ_score))
+
+        if has_prior:
+            # 1. Measure baseline occupancy score of real stationary pieces on the board
+            stationary_scores = [
+                a.occ_score
+                for sq, a in results.items()
+                if prior_map.get(sq) is not None and a.occ_score >= 0.85
+            ]
+            median_occ = (
+                float(np.median(stationary_scores))
+                if len(stationary_scores) >= 4
+                else 1.45
+            )
+
+            # 2. Apply per-square prior hysteresis & stricter empty-square gate
+            for sq, a in results.items():
+                if sq in unbiased:
+                    continue
+                expected = prior_map.get(sq)
+                if expected is not None:
+                    # Square had a piece: protect against borderline dim lighting
+                    if (
+                        not a.occupied
+                        and a.occ_score >= 0.82
+                        and a.puck_score >= self._struct_thresh * 0.45
+                    ):
+                        a.occupied = True
+                        exp_color, exp_piece = expected
+                        roi = squares.get(sq)
+                        if roi is not None:
+                            col, col_conf = self._detect_color(roi, center=a.center)
+                            a.color = exp_color if col_conf < 0.80 else col
+                        else:
+                            a.color = exp_color
+                        a.piece = exp_piece
+                        a.confidence = max(a.confidence, 0.74)
+                else:
+                    # Square was empty in prior_board: reject weak reflections/shadows
+                    if a.occupied:
+                        if prior_mode == "post_move":
+                            min_req = max(1.40, min(1.85, 0.60 * median_occ))
+                            min_puck = self._struct_thresh * 0.85
+                        else:
+                            min_req = max(1.10, min(1.45, 0.46 * median_occ))
+                            min_puck = self._struct_thresh * 0.62
+                        if a.occ_score < min_req or a.puck_score < min_puck:
+                            _clear_sq(a)
+
+            # 3. In a single move from prior_board, at most 1 previously-empty square
+            #    becomes occupied (or 2 on rank 1/8 during castling). Suppress weaker
+            #    false-positive empty squares when a stronger destination square exists.
+            if prior_mode in ("pre_move", "auto"):
+                new_occupied = [
+                    a for sq, a in results.items()
+                    if prior_map.get(sq) is None and a.occupied and sq not in unbiased
+                ]
+                if len(new_occupied) > 1:
+                    new_occupied.sort(key=lambda x: x.occ_score, reverse=True)
+                    best_new = new_occupied[0]
+                    # Allow a 2nd square only if both are back-rank castling squares with comparable scores
+                    is_castling_pair = (
+                        len(new_occupied) >= 2
+                        and best_new.square[1] in ("1", "8")
+                        and new_occupied[1].square[1] == best_new.square[1]
+                        and new_occupied[1].occ_score >= 0.72 * best_new.occ_score
+                    )
+                    keep_count = 2 if is_castling_pair else 1
+                    for extra in new_occupied[keep_count:]:
+                        if extra.occ_score < 0.82 * best_new.occ_score or len(new_occupied) > keep_count:
+                            _clear_sq(extra)
+
+        # 4. Global Piece-Count Limit (Top-N by prior-weighted occupancy score)
+        occupied_list = [a for a in results.values() if a.occupied]
+        if len(occupied_list) > cap_n:
+            occupied_list.sort(
+                key=lambda a: a.occ_score + (0.18 if prior_map.get(a.square) is not None else 0.0),
+                reverse=True,
+            )
+            for extra in occupied_list[cap_n:]:
+                _clear_sq(extra)
+
+        # 5. Propagate piece types and colours from prior_board
+        if has_prior:
+            vacated = [
+                sq for sq, exp in prior_map.items()
+                if exp is not None and not results[sq].occupied
+            ]
+            entered = [
+                sq for sq, exp in prior_map.items()
+                if exp is None and results[sq].occupied
+            ]
+
+            # Map destination square -> origin square's (color, piece_type)
+            moved_into: dict[str, tuple[str, str]] = {}
+            if len(vacated) == 1 and len(entered) == 1:
+                orig_info = prior_map.get(vacated[0])
+                if orig_info is not None:
+                    moved_into[entered[0]] = orig_info
+            elif len(vacated) == 2 and len(entered) == 2:
+                # Castling: assign king to C/G file and rook to D/F file
+                for dst in entered:
+                    for src in vacated:
+                        s_info = prior_map.get(src)
+                        if s_info is None:
+                            continue
+                        if dst[0] in ("C", "G") and s_info[1] == "king":
+                            moved_into[dst] = s_info
+                        elif dst[0] in ("D", "F") and s_info[1] == "rook":
+                            moved_into[dst] = s_info
+
+            for sq, a in results.items():
+                if not a.occupied:
+                    continue
+                roi = squares.get(sq)
+                exp = prior_map.get(sq)
+
+                # Case 1: Square was entered from a known vacated square
+                if sq in moved_into:
+                    mv_color, mv_piece = moved_into[sq]
+                    if a.color != mv_color and a.confidence < 0.85:
+                        a.color = mv_color
+                    is_promo = (mv_piece == "pawn" and sq[1] in ("1", "8"))
+                    if not is_promo:
+                        a.piece = mv_piece
+                    elif self._classifier is not None and roi is not None:
+                        p_cls, _ = self._classifier.classify(roi, a.color, center=a.center)
+                        a.piece = p_cls if p_cls in ("queen", "rook", "bishop", "knight") else "queen"
+                    continue
+
+                # Case 2: Square was already occupied in prior_board
+                if exp is not None:
+                    exp_color, exp_piece = exp
+                    # Check if this square was captured by the single vacated opponent piece
+                    if (
+                        a.color is not None
+                        and a.color != exp_color
+                        and len(vacated) == 1
+                        and prior_map.get(vacated[0]) is not None
+                        and prior_map[vacated[0]][0] == a.color
+                    ):
+                        cap_color, cap_piece = prior_map[vacated[0]]
+                        is_promo = (cap_piece == "pawn" and sq[1] in ("1", "8"))
+                        a.piece = cap_piece if not is_promo else (a.piece or "queen")
+                    else:
+                        # Stationary piece: stabilize colour on borderline lighting and assign known type
+                        if a.color != exp_color and sq not in unbiased:
+                            if roi is not None:
+                                _, col_conf = self._detect_color(roi, center=a.center)
+                                if col_conf < 0.82 or not vacated:
+                                    a.color = exp_color
+                        if a.color == exp_color:
+                            a.piece = exp_piece
 
     def analyze_cemetery_slot(
         self, index: int, roi: np.ndarray, side: str = "white"
@@ -269,7 +536,9 @@ class PieceDetector:
         side : str
             "white" or "black" (helps set expected colour for confidence).
         """
-        occupied, occ_confidence, mad, variance, center = self._detect_occupancy(roi, None)
+        occupied, occ_confidence, mad, variance, center, puck_score, occ_score = (
+            self._detect_occupancy(roi, None)
+        )
         color: Optional[str] = None
         color_confidence = 1.0
         if occupied:
@@ -285,6 +554,8 @@ class PieceDetector:
             mad=mad,
             variance=variance,
             center=center,
+            puck_score=puck_score,
+            occ_score=occ_score,
         )
 
     # ------------------------------------------------------------------
@@ -295,9 +566,9 @@ class PieceDetector:
         self,
         roi: np.ndarray,
         ref_roi: np.ndarray | None,
-    ) -> tuple[bool, float, float, float, tuple[int, int]]:
+    ) -> tuple[bool, float, float, float, tuple[int, int], float, float]:
         """
-        Returns ``(occupied, confidence, mad, variance, center)``.
+        Returns ``(occupied, confidence, mad, variance, center, puck_score, occ_score)``.
 
         Strategy
         --------
@@ -353,11 +624,18 @@ class PieceDetector:
             # make a piece's brightness match the old reference (e.g. moving the board to a new room).
             has_structure = (
                 puck_score >= self._struct_thresh * 0.55
-                or icon_std >= 12.0
-                or mad >= self._diff_thresh * 1.85
+                or (icon_std >= 11.5 and puck_score >= self._struct_thresh * 0.30)
+                or (mad >= self._diff_thresh * 2.10 and puck_score >= self._struct_thresh * 0.35)
             )
             strong_puck = puck_score >= self._struct_thresh * 2.5
             occupied = ((mad >= self._diff_thresh) and has_structure) or strong_puck
+
+            mad_ratio = mad / max(0.01, self._diff_thresh)
+            struct_ratio = puck_score / max(1.0, self._struct_thresh)
+            if has_structure or strong_puck:
+                occ_score = max(mad_ratio, struct_ratio / 2.2)
+            else:
+                occ_score = min(0.75, mad_ratio * 0.45)
 
             if occupied:
                 mad_conf = min(1.0, mad / (self._diff_thresh * 2.5))
@@ -369,17 +647,18 @@ class PieceDetector:
                 else:
                     raw_conf = min(1.0, (self._struct_thresh - puck_score) / self._struct_thresh)
             confidence = 0.5 + raw_conf * 0.5
-            return occupied, float(confidence), mad, variance, center
+            return occupied, float(confidence), mad, variance, center, float(puck_score), float(occ_score)
 
         else:
             mad = 0.0
+            occ_score = puck_score / max(1.0, self._struct_thresh)
             occupied = puck_score >= self._struct_thresh
             if occupied:
                 raw_conf = min(1.0, puck_score / (self._struct_thresh * 2.5))
             else:
                 raw_conf = min(1.0, (self._struct_thresh - puck_score) / max(1.0, self._struct_thresh))
             confidence = 0.5 + raw_conf * 0.45
-            return occupied, float(confidence), mad, variance, center
+            return occupied, float(confidence), mad, variance, center, float(puck_score), float(occ_score)
 
     # ------------------------------------------------------------------
     # Colour detection

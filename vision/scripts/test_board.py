@@ -76,14 +76,12 @@ def main() -> None:
     squares = segmenter.segment_board(warped)
     detector = PieceDetector(reference_image=ref_img)
 
-    results = {}
+    results = detector.analyze_all(squares)
     occupied_count = 0
     white_count = 0
     black_count = 0
 
-    for name, roi in squares.items():
-        analysis = detector.analyze_square(name, roi)
-        results[name] = analysis
+    for analysis in results.values():
         if analysis.occupied:
             occupied_count += 1
             if analysis.color == "white":

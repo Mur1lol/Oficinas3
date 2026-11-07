@@ -271,6 +271,9 @@ def verify_board_position(
         obs_occ = phys.occupied if phys else False
         obs_color = phys.color if (phys and obs_occ) else None
 
+        if exp_occ and obs_occ and exp_color == obs_color and phys and not phys.piece and logical_piece:
+            phys.piece = PIECE_NAME_EN.get(logical_piece.piece_type)
+
         if exp_occ != obs_occ or (exp_occ and exp_color != obs_color):
             mismatches.append({
                 "square": sq_name,
@@ -379,6 +382,8 @@ def detect_and_validate_manual_move(
         obs_piece = phys.piece if (phys and obs_occ) else None
 
         if exp_occ == obs_occ and (not exp_occ or exp_color == obs_color):
+            if exp_occ and phys and not phys.piece and p:
+                phys.piece = PIECE_NAME_EN.get(p.piece_type)
             continue
 
         change_entry = {
@@ -455,13 +460,56 @@ def detect_and_validate_manual_move(
         from_sq_cand = vacated_own[0]
         to_sq_cand = entered_empty_own[0]
 
-    # Case E: Fallback — if 1 own vacated and 1 destination (even with 1 minor noise square),
+    # Case E: Fallback — if 1 own vacated and 1 destination (even with minor noise),
     # check if there is a unique legal move matching (vacated_own, entered_empty_own + replaced_opp_by_own)
     if from_sq_cand is None and len(vacated_own) == 1:
         dests = entered_empty_own + replaced_opp_by_own
-        if len(dests) == 1 and len(unexpected_changes) == 0:
+        if len(dests) == 1 and len(unexpected_changes) <= 1:
             from_sq_cand = vacated_own[0]
             to_sq_cand = dests[0]
+
+    # Case F: Prior-guided legal move disambiguation — when 1 or 2 empty/other squares
+    # have false-positive noise, filter candidates against board.legal_moves
+    if from_sq_cand is None and vacated_own and len(changed_squares) <= 4:
+        legal_pairs: list[tuple[str, str, float]] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for mv in board.legal_moves:
+            u = chess.square_name(mv.from_square).upper()
+            v = chess.square_name(mv.to_square).upper()
+            if (u, v) in seen_pairs or u not in vacated_own:
+                continue
+            if board.is_castling(mv) and v in entered_empty_own:
+                seen_pairs.add((u, v))
+                conf_v = state.board[v].confidence if v in state.board else 0.5
+                legal_pairs.append((u, v, conf_v + 0.2))
+            elif (board.is_capture(mv) and not board.is_en_passant(mv)) and v in replaced_opp_by_own:
+                seen_pairs.add((u, v))
+                conf_v = state.board[v].confidence if v in state.board else 0.5
+                legal_pairs.append((u, v, conf_v))
+            elif (not board.is_capture(mv) or board.is_en_passant(mv)) and v in entered_empty_own:
+                seen_pairs.add((u, v))
+                conf_v = state.board[v].confidence if v in state.board else 0.5
+                legal_pairs.append((u, v, conf_v))
+
+        if len(legal_pairs) == 1:
+            from_sq_cand, to_sq_cand, _ = legal_pairs[0]
+            # Suppress the unrelated noise squares in state.board & changed_squares
+            involved = {from_sq_cand, to_sq_cand}
+            for ch in list(changed_squares):
+                sq_n = ch["square"]
+                if sq_n in involved:
+                    continue
+                lp = board.piece_at(chess.parse_square(sq_n.lower()))
+                if sq_n in state.board:
+                    if lp is None:
+                        state.board[sq_n].occupied = False
+                        state.board[sq_n].color = None
+                        state.board[sq_n].piece = None
+                    else:
+                        state.board[sq_n].occupied = True
+                        state.board[sq_n].color = "white" if lp.color == chess.WHITE else "black"
+                        state.board[sq_n].piece = PIECE_NAME_EN.get(lp.piece_type)
+            changed_squares = [c for c in changed_squares if c["square"] in involved]
 
     if from_sq_cand is None or to_sq_cand is None:
         sq_summary = ", ".join(f"{c['square']}({c['before']}->{c['after']})" for c in changed_squares[:4])
@@ -481,6 +529,9 @@ def detect_and_validate_manual_move(
     moving_piece = board.piece_at(from_idx)
     piece_en = PIECE_NAME_EN.get(moving_piece.piece_type, "piece") if moving_piece else "piece"
     piece_pt = PIECE_NAME_PT.get(moving_piece.piece_type, "Peça") if moving_piece else "Peça"
+    if to_sq_cand in state.board and state.board[to_sq_cand].occupied:
+        if not (moving_piece and moving_piece.piece_type == chess.PAWN and chess.square_rank(to_idx) in (0, 7)):
+            state.board[to_sq_cand].piece = piece_en
 
     # Determine promotion if pawn reaches last rank
     candidates: list[chess.Move] = []

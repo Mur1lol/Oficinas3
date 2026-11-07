@@ -234,14 +234,25 @@ class MoveValidator:
     # Internal
     # ------------------------------------------------------------------
 
-    def _process_board(self, corrected: np.ndarray) -> BoardState:
+    def _process_board(
+        self,
+        corrected: np.ndarray,
+        prior_board: Optional[object] = None,
+        prior_mode: str = "auto",
+        unbiased_squares: Optional[set[str] | list[str] | tuple[str, ...]] = None,
+    ) -> BoardState:
         """
         Segment and analyse a corrected image → BoardState.
         """
         squares    = self._segmenter.segment_board(corrected)
         cem_slots  = self._segmenter.segment_cemeteries(corrected)
 
-        analyses   = self._detector.analyze_all(squares)
+        analyses   = self._detector.analyze_all(
+            squares,
+            prior_board=prior_board,
+            prior_mode=prior_mode,
+            unbiased_squares=unbiased_squares,
+        )
         confidences = [a.confidence for a in analyses.values()]
 
         board = {

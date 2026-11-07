@@ -308,7 +308,13 @@ class CameraSystem:
         self._reload_runtime_calibration_and_settings()
         return self._validator.capture_state("board_state")
 
-    def _capture_warped_and_state(self, label: str = "capture") -> tuple[Optional[object], Optional[BoardState]]:
+    def _capture_warped_and_state(
+        self,
+        label: str = "capture",
+        prior_board: Optional[object] = None,
+        prior_mode: str = "auto",
+        unbiased_squares: Optional[set[str] | list[str] | tuple[str, ...]] = None,
+    ) -> tuple[Optional[object], Optional[BoardState]]:
         """Capture a single corrected frame and its processed BoardState."""
         self._reload_runtime_calibration_and_settings()
         frame = self._camera.capture_with_retry(max_attempts=cfg.MAX_CAPTURE_ATTEMPTS)
@@ -316,7 +322,12 @@ class CameraSystem:
             return None, None
         warped = self._calibrator.correct_perspective(frame)
         self._diag.save(warped, f"{label}_corrected")
-        state = self._validator._process_board(warped)
+        state = self._validator._process_board(
+            warped,
+            prior_board=prior_board,
+            prior_mode=prior_mode,
+            unbiased_squares=unbiased_squares,
+        )
         self._reference_state = state
         return warped, state
 
@@ -340,7 +351,19 @@ class CameraSystem:
         if settle_seconds > 0:
             time.sleep(settle_seconds)
 
-        warped, state = self._capture_warped_and_state("post_gantry")
+        unbiased = None
+        if last_move is not None:
+            import chess
+            unbiased = {
+                chess.square_name(last_move.from_square).upper(),
+                chess.square_name(last_move.to_square).upper(),
+            }
+        warped, state = self._capture_warped_and_state(
+            "post_gantry",
+            prior_board=board,
+            prior_mode="post_move",
+            unbiased_squares=unbiased,
+        )
         if state is None or warped is None:
             res = PositionVerificationResult(
                 success=False,
@@ -390,7 +413,11 @@ class CameraSystem:
                 lcd_lines=("CAMERA OFFLINE", "CANNOT VALIDATE", "", ""),
             )
 
-        warped, state = self._capture_warped_and_state("manual_validate")
+        warped, state = self._capture_warped_and_state(
+            "manual_validate",
+            prior_board=board,
+            prior_mode="pre_move",
+        )
         if state is None or warped is None:
             res = ManualValidationResult(
                 valid=False,
