@@ -225,21 +225,19 @@ class VoiceChessGame:
 
     def _on_confirm(self, command) -> None:
         """
-        Speaker repete o comando e o LCD o mostra, enquanto espera SIM/NAO.
-        (Nota: os comandos de menu sao imediatos por padrao em parser.IMMEDIATE_ACTIONS,
-        mas as frases de confirmacao abaixo permanecem prontas caso queira reativar).
+        Speaker repete o comando reconhecido e o LCD o mostra, enquanto aguarda YES/NO.
         """
         if isinstance(command, MoveCommand):
             speech, lines = phrases.confirm_move(self.planner.board,
                                                  command.from_square, command.to_square)
         elif isinstance(command, LevelCommand):
-            speech = f"level {command.level}. Say yes or no."
+            speech = f"Level {command.level}. Say yes or no."
             lines = ("CONFIRM LEVEL?", f"LEVEL {command.level}", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "NEW_GAME":
-            speech = "start new game. Say yes or no."
+            speech = "Start new game. Say yes or no."
             lines = ("START NEW GAME?", "=== VOICE CHESS ===", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "RESIGN_GAME":
-            speech = "resign game. Say yes or no."
+            speech = "Resign game. Say yes or no."
             lines = ("RESIGN GAME?", "END CURRENT GAME", "SAY: YES OR NO", "")
         elif isinstance(command, ActionCommand) and command.action == "MODE_PVE":
             speech = "Option 2, Player versus engine mode. Say yes or no."
@@ -253,6 +251,27 @@ class VoiceChessGame:
         elif isinstance(command, ActionCommand) and command.action == "COLOR_BLACK":
             speech = "Black pieces. Say yes or no."
             lines = ("CONFIRM COLOR?", "COLOR: BLACK", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "VALIDATE_MOVE":
+            speech = "Validate board. Say yes or no."
+            lines = ("CONFIRM VALIDATE?", "CAMERA CHECK", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "REPEAT_MOVE":
+            speech = "Repeat move. Say yes or no."
+            lines = ("CONFIRM REPEAT?", "RETRY GANTRY MOVE", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "PROMOTE_QUEEN":
+            speech = "Promote to Queen. Say yes or no."
+            lines = ("CONFIRM PROMOTION?", "PIECE: QUEEN", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "PROMOTE_ROOK":
+            speech = "Promote to Rook. Say yes or no."
+            lines = ("CONFIRM PROMOTION?", "PIECE: ROOK", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "PROMOTE_BISHOP":
+            speech = "Promote to Bishop. Say yes or no."
+            lines = ("CONFIRM PROMOTION?", "PIECE: BISHOP", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "PROMOTE_KNIGHT":
+            speech = "Promote to Knight. Say yes or no."
+            lines = ("CONFIRM PROMOTION?", "PIECE: KNIGHT", "SAY: YES OR NO", "")
+        elif isinstance(command, ActionCommand) and command.action == "CANCEL":
+            speech = "Cancel. Say yes or no."
+            lines = ("CONFIRM CANCEL?", "CANCEL ACTION", "SAY: YES OR NO", "")
         else:
             speech = f"{command}. Say yes or no."
             lines = ("CONFIRM?", f"{command}", "SAY: YES OR NO", "")
@@ -306,7 +325,7 @@ class VoiceChessGame:
                 self._command_not_recognized()
                 self.lcd.show(*idle_lcd)
                 continue
-            # --- Caso reative a confirmacao (YES/NO) para o comando START NEW GAME: ---
+            # Se o comando nao foi confirmado (jogador disse NO ou silencio):
             if result.command and not result.confirmed:
                 self.lcd.show(
                     "=== VOICE CHESS ===",
@@ -315,6 +334,7 @@ class VoiceChessGame:
                     "START NEW GAME",
                 )
                 self.speaker.say("Cancelled.", wait=True)
+                self.lcd.show(*idle_lcd)
             elif result.wake_detected and not result.command:
                 self._command_not_recognized()
                 self.lcd.show(*idle_lcd)
@@ -388,14 +408,13 @@ class VoiceChessGame:
 
         while True:
             result = self.listener.listen()
-            # --- Caso reative confirmacao YES/NO no futuro: ---
-            # if result.command and not result.confirmed:
-            #     self.lcd.show(*mode_lcd)
-            #     self.speaker.say("Cancelled.", wait=True)
-            #     continue
             if result.command is not None and not self._is_command_allowed(result.command):
                 self._command_not_recognized()
                 self.lcd.show(*mode_lcd)
+                continue
+            if result.command and not result.confirmed:
+                self.lcd.show(*mode_lcd)
+                self.speaker.say("Cancelled.", wait=True)
                 continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
@@ -434,14 +453,13 @@ class VoiceChessGame:
 
         while True:
             result = self.listener.listen()
-            # --- Caso reative confirmacao YES/NO no futuro: ---
-            # if result.command and not result.confirmed:
-            #     self.lcd.show(*lvl_lcd)
-            #     self.speaker.say("Cancelled.", wait=True)
-            #     continue
             if result.command is not None and not self._is_command_allowed(result.command):
                 self._command_not_recognized()
                 self.lcd.show(*lvl_lcd)
+                continue
+            if result.command and not result.confirmed:
+                self.lcd.show(*lvl_lcd)
+                self.speaker.say("Cancelled.", wait=True)
                 continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
@@ -480,14 +498,13 @@ class VoiceChessGame:
 
         while True:
             result = self.listener.listen()
-            # --- Caso reative confirmacao YES/NO no futuro: ---
-            # if result.command and not result.confirmed:
-            #     self.lcd.show(*color_lcd)
-            #     self.speaker.say("Cancelled.", wait=True)
-            #     continue
             if result.command is not None and not self._is_command_allowed(result.command):
                 self._command_not_recognized()
                 self.lcd.show(*color_lcd)
+                continue
+            if result.command and not result.confirmed:
+                self.lcd.show(*color_lcd)
+                self.speaker.say("Cancelled.", wait=True)
                 continue
             if result.wake_detected and not result.command:
                 self._command_not_recognized()
@@ -568,6 +585,10 @@ class VoiceChessGame:
                 if result.command is not None and not self._is_command_allowed(result.command):
                     self._command_not_recognized()
                     self.lcd.show(*err_lcd)
+                    continue
+                if result.command and not result.confirmed:
+                    self.lcd.show(*err_lcd)
+                    self.speaker.say("Cancelled.", wait=True)
                     continue
                 if result.wake_detected and not result.command:
                     self._command_not_recognized()
@@ -995,9 +1016,9 @@ class VoiceChessGame:
                     self._command_not_recognized(side=side_led)
                     continue
                 if result.command and not result.confirmed:
-                    self.lcd.show("=== PROMOTION ===", "CANCELLED", "", "")
+                    self.lcd.show("=== PROMOTION ===", "CANCELLED", opts_line, "CHOOSE PIECE")
                     self.speaker.say("Cancelled.", wait=True)
-                    return None
+                    continue
                 if not result.confirmed:
                     continue
 
@@ -1191,6 +1212,10 @@ class VoiceChessGame:
                         self._command_not_recognized(side=side)
                         self.lcd.show(*ver.lcd_lines)
                         continue
+                    if result.command and not result.confirmed:
+                        self.lcd.show(*ver.lcd_lines)
+                        self.speaker.say("Cancelled.", wait=True)
+                        continue
                     if result.wake_detected and not result.command:
                         self._command_not_recognized(side=side)
                         self.lcd.show(*ver.lcd_lines)
@@ -1352,6 +1377,10 @@ class VoiceChessGame:
                             if result.command is not None and not self._is_command_allowed(result.command):
                                 self._command_not_recognized()
                                 self.lcd.show(*ver.lcd_lines)
+                                continue
+                            if result.command and not result.confirmed:
+                                self.lcd.show(*ver.lcd_lines)
+                                self.speaker.say("Cancelled.", wait=True)
                                 continue
                             if result.wake_detected and not result.command:
                                 self._command_not_recognized()

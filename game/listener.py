@@ -148,8 +148,29 @@ class TextListener:
                 wake_detected=True,
             )
 
-        print(f"   [VOZ] Comando valido identificado: {command} -> Executando imediatamente.")
-        return ListenResult(command, confirmed=True, wake_detected=True)
+        if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
+            isinstance(command, LevelCommand) and IMMEDIATE_LEVEL
+        ):
+            print(f"   [VOZ] Comando valido identificado: {command} -> Executando imediatamente.")
+            return ListenResult(command, confirmed=True, wake_detected=True)
+
+        self._on_confirm(command)
+        self._on_listening(True, "confirmation")
+        try:
+            answer = input("[voz] confirma? (yes/no): ")
+        except EOFError:
+            raise KeyboardInterrupt
+        finally:
+            self._on_listening(False, "")
+        confirmed = parse_confirmation(answer, "en-US")
+        if confirmed is True:
+            return ListenResult(command, confirmed=True, wake_detected=True)
+        return ListenResult(
+            command,
+            confirmed=False,
+            reason="Command cancelled" if confirmed is False else "Confirmation missing or ambiguous",
+            wake_detected=True,
+        )
 
     def listen_yes_no(self) -> bool | None:
         self._before_listen()

@@ -130,8 +130,28 @@ class VoiceCommandPipeline:
             logger.warning("[VOZ] Entendi {} mas NAO e permitido neste momento do jogo", command)
             return self._failure(command, "Command not allowed in current state", wake_detected=True)
 
-        # Comandos validos sao executados imediatamente sem exigir confirmacao YES/NO
-        logger.success("[VOZ] ENTENDI: {} -> EXECUTANDO", command)
+        # Comandos imediatos (caso algum seja configurado em IMMEDIATE_ACTIONS)
+        if (isinstance(command, ActionCommand) and command.action in IMMEDIATE_ACTIONS) or (
+            isinstance(command, LevelCommand) and IMMEDIATE_LEVEL
+        ):
+            logger.success("[VOZ] ENTENDI: {} -> EXECUTANDO IMEDIATAMENTE", command)
+            stream.check()
+            self._set_state(PipelineState.EMIT, command)
+            return VoiceResult(command, confirmed=True, wake_detected=True)
+
+        logger.info("[VOZ] ENTENDI: {} -> Aguardando confirmacao (YES/NO)...", command)
+        stream.discard_pending()
+        self._set_state(PipelineState.CONFIRMATION_LISTEN, command)
+        answer = self.recognizer.listen(stream, "confirmation", self.settings.confirmation_timeout)
+        confirmed = parse_confirmation(answer, self.settings.language)
+        if confirmed is not True:
+            reason = (
+                "Command cancelled" if confirmed is False else "Confirmation missing or ambiguous"
+            )
+            logger.warning("[VOZ] Confirmacao recusada ou ausente (ouvi {!r}): {}", answer, reason)
+            return self._failure(command, reason, wake_detected=True)
+
+        logger.success("[VOZ] CONFIRMADO (YES): {} -> EXECUTANDO", command)
         stream.check()
         self._set_state(PipelineState.EMIT, command)
         return VoiceResult(command, confirmed=True, wake_detected=True)

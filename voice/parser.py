@@ -111,9 +111,9 @@ _SINGLE_WORD = {
     "knight": "PROMOTE_KNIGHT",
 }
 
-# Todos os comandos validos executam direto (sem YES/NO)
-IMMEDIATE_ACTIONS = set(ACTIONS)
-IMMEDIATE_LEVEL = True
+# Comandos que executam direto sem pedir confirmacao YES/NO (vazio = todos pedem confirmacao)
+IMMEDIATE_ACTIONS: set[str] = set()
+IMMEDIATE_LEVEL: bool = False
 
 MOVE_WORDS = {"move"}
 LEVEL_WORDS = {"level"}
@@ -236,7 +236,7 @@ def parse(text: str, language: str | None = None) -> tuple[Command | None, str |
 
 
 def parse_confirmation(text: str | None, language: str | None = None) -> bool | None:
-    tokens = set(normalize(text or "").split())
+    tokens = {t for t in normalize(text or "").split() if t != "unk"}
     if tokens and tokens <= YES:
         return True
     if tokens and tokens <= NO:
