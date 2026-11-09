@@ -486,22 +486,24 @@ def detect_and_validate_manual_move(
         else:
             unexpected_changes.append(change_entry)
 
-    # ── 1. No move detected at all (or pieces swapped in place) ───────
+    # ── 1. Check if stationary pieces on the board are swapped out of place ──
+    if swapped_same_color:
+        sq_list = ", ".join(
+            f"{s['square']} (esperado {s['before'].split('_')[-1]}, visto {s['detected_piece']})"
+            for s in swapped_same_color[:4]
+        )
+        return ManualValidationResult(
+            valid=False,
+            error_code="PIECES_SWAPPED",
+            message=f"Peças trocadas ou fora da posição esperada: {sq_list}.",
+            speech="Invalid board state. Some pieces are swapped or in the wrong positions.",
+            lcd_lines=("PIECES SWAPPED!", "CHECK BOARD SETUP", swapped_same_color[0]["square"], "FIX & VALIDATE"),
+            changed_squares=swapped_same_color + changed_squares,
+            confidence=state.overall_confidence,
+        )
+
+    # ── 1b. No move detected at all ───────────────────────────────────
     if not changed_squares:
-        if swapped_same_color:
-            sq_list = ", ".join(
-                f"{s['square']} (esperado {s['before'].split('_')[-1]}, visto {s['detected_piece']})"
-                for s in swapped_same_color[:4]
-            )
-            return ManualValidationResult(
-                valid=False,
-                error_code="PIECES_SWAPPED",
-                message=f"Peças fora da posição esperada: {sq_list}.",
-                speech="Invalid board state. Some pieces are swapped or in the wrong positions.",
-                lcd_lines=("PIECES SWAPPED!", "CHECK BOARD SETUP", swapped_same_color[0]["square"], "FIX & VALIDATE"),
-                changed_squares=swapped_same_color,
-                confidence=state.overall_confidence,
-            )
         return ManualValidationResult(
             valid=False,
             error_code="NO_MOVE_DETECTED",
@@ -624,11 +626,42 @@ def detect_and_validate_manual_move(
     moving_piece = board.piece_at(from_idx)
     piece_en = PIECE_NAME_EN.get(moving_piece.piece_type, "piece") if moving_piece else "piece"
     piece_pt = PIECE_NAME_PT.get(moving_piece.piece_type, "Peça") if moving_piece else "Peça"
+    is_promo_move = bool(
+        moving_piece and moving_piece.piece_type == chess.PAWN and chess.square_rank(to_idx) in (0, 7)
+    )
     if to_sq_cand in state.board and state.board[to_sq_cand].occupied:
-        if state.board[to_sq_cand].piece is None and not (
-            moving_piece and moving_piece.piece_type == chess.PAWN and chess.square_rank(to_idx) in (0, 7)
-        ):
+        obs_dest_piece = state.board[to_sq_cand].piece
+        if obs_dest_piece is None and not is_promo_move:
             state.board[to_sq_cand].piece = piece_en
+        elif (
+            obs_dest_piece is not None
+            and not is_promo_move
+            and obs_dest_piece != piece_en
+        ):
+            obs_pt = PIECE_NAME_PT.get(STR_TO_PROMOTION.get(obs_dest_piece, chess.PAWN), obs_dest_piece)
+            return ManualValidationResult(
+                valid=False,
+                from_square=from_sq_cand,
+                to_square=to_sq_cand,
+                piece_name=obs_dest_piece,
+                error_code="PIECES_SWAPPED",
+                message=(
+                    f"Peça incorreta em {to_sq_cand}: a casa de origem {from_sq_cand} tinha {piece_pt} ({piece_en}), "
+                    f"mas a câmera identificou {obs_dest_piece} em {to_sq_cand}."
+                ),
+                speech=(
+                    f"Invalid move. Expected {piece_en} from {_spoken_sq(from_sq_cand)}, "
+                    f"but detected {obs_dest_piece} on {_spoken_sq(to_sq_cand)}."
+                ),
+                lcd_lines=(
+                    "WRONG PIECE MOVED!",
+                    f"EXP: {piece_en.upper()}",
+                    f"SAW: {obs_dest_piece.upper()} AT {to_sq_cand}",
+                    "FIX & VALIDATE",
+                ),
+                changed_squares=changed_squares,
+                confidence=state.overall_confidence,
+            )
 
     # Determine promotion if pawn reaches last rank
     candidates: list[chess.Move] = []
