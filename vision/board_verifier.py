@@ -659,7 +659,7 @@ def detect_and_validate_manual_move(
             lcd_err = "KING IN CHECK!"
         else:
             reason_pt = f"Movimento ilegal para {piece_pt}: {from_sq_cand} → {to_sq_cand}."
-            reason_en = f"Invalid move. {piece_en.capitalize()} {_spoken_sq(from_sq_cand)} to {_spoken_sq(to_sq_cand)} is not legal."
+            reason_en = f"Invalid move. {piece_en.capitalize()} {_spoken_sq(from_sq_cand)} to {_spoken_sq(to_sq_cand)} is not legal. Return the piece to the original position."
             lcd_err = "NOT LEGAL ON BOARD"
 
         return ManualValidationResult(
