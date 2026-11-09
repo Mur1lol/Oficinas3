@@ -225,10 +225,10 @@ class PieceDetector:
             if (
                 expected_color in ("white", "black")
                 and color != expected_color
-                and color_confidence < 0.78
+                and color_confidence < 0.53
             ):
                 color = expected_color
-                color_confidence = 0.78
+                color_confidence = 0.55
 
         # ── Combined confidence ───────────────────────────────────────
         confidence = occ_confidence * color_confidence if occupied else occ_confidence
@@ -418,14 +418,13 @@ class PieceDetector:
                         and a.puck_score >= self._struct_thresh * 0.45
                     ):
                         a.occupied = True
-                        exp_color, exp_piece = expected
+                        exp_color, _ = expected
                         roi = squares.get(sq)
                         if roi is not None:
                             col, col_conf = self._detect_color(roi, center=a.center)
-                            a.color = exp_color if col_conf < 0.80 else col
+                            a.color = exp_color if col_conf < 0.53 else col
                         else:
                             a.color = exp_color
-                        a.piece = exp_piece
                         a.confidence = max(a.confidence, 0.74)
                 else:
                     # Square was empty in prior_board: reject weak reflections/shadows
@@ -473,7 +472,8 @@ class PieceDetector:
             for extra in occupied_list[cap_n:]:
                 _clear_sq(extra)
 
-        # 5. Propagate piece types and colours from prior_board
+        # 5. Classify occupied squares visually (using prior only as a light tie-breaker)
+        moved_into: dict[str, tuple[str, str]] = {}
         if has_prior:
             vacated = [
                 sq for sq, exp in prior_map.items()
@@ -484,14 +484,11 @@ class PieceDetector:
                 if exp is None and results[sq].occupied
             ]
 
-            # Map destination square -> origin square's (color, piece_type)
-            moved_into: dict[str, tuple[str, str]] = {}
             if len(vacated) == 1 and len(entered) == 1:
                 orig_info = prior_map.get(vacated[0])
                 if orig_info is not None:
                     moved_into[entered[0]] = orig_info
             elif len(vacated) == 2 and len(entered) == 2:
-                # Castling: assign king to C/G file and rook to D/F file
                 for dst in entered:
                     for src in vacated:
                         s_info = prior_map.get(src)
@@ -502,55 +499,31 @@ class PieceDetector:
                         elif dst[0] in ("D", "F") and s_info[1] == "rook":
                             moved_into[dst] = s_info
 
-            for sq, a in results.items():
-                if not a.occupied:
-                    continue
-                roi = squares.get(sq)
-                exp = prior_map.get(sq)
+        for sq, a in results.items():
+            if not a.occupied:
+                continue
+            roi = squares.get(sq)
+            exp = prior_map.get(sq)
 
-                # Case 1: Square was entered from a known vacated square
-                if sq in moved_into:
-                    mv_color, mv_piece = moved_into[sq]
-                    if a.color != mv_color and a.confidence < 0.85:
-                        a.color = mv_color
-                    is_promo = (mv_piece == "pawn" and sq[1] in ("1", "8"))
-                    if not is_promo:
-                        a.piece = mv_piece
-                    elif self._classifier is not None and roi is not None:
-                        p_cls, _ = self._classifier.classify(roi, a.color, center=a.center)
-                        a.piece = p_cls if p_cls in ("queen", "rook", "bishop", "knight") else "queen"
-                    continue
+            # Determine weak tie-breaker hint ONLY if detected colour matches expected colour
+            prior_piece_hint: Optional[str] = None
+            if sq in moved_into:
+                mv_color, mv_piece = moved_into[sq]
+                is_promo = (mv_piece == "pawn" and sq[1] in ("1", "8"))
+                if not is_promo and a.color == mv_color:
+                    prior_piece_hint = mv_piece
+            elif exp is not None and a.color == exp[0]:
+                prior_piece_hint = exp[1]
 
-                # Case 2: Square was already occupied in prior_board
-                if exp is not None:
-                    exp_color, exp_piece = exp
-                    # Check if this square was captured by the single vacated opponent piece
-                    if (
-                        a.color is not None
-                        and a.color != exp_color
-                        and len(vacated) == 1
-                        and prior_map.get(vacated[0]) is not None
-                        and prior_map[vacated[0]][0] == a.color
-                    ):
-                        cap_color, cap_piece = prior_map[vacated[0]]
-                        is_promo = (cap_piece == "pawn" and sq[1] in ("1", "8"))
-                        a.piece = cap_piece if not is_promo else (a.piece or "queen")
-                    else:
-                        # Stationary piece: stabilize colour on borderline lighting and assign known type
-                        if a.color != exp_color and sq not in unbiased:
-                            if roi is not None:
-                                _, col_conf = self._detect_color(roi, center=a.center)
-                                if col_conf < 0.82 or not vacated:
-                                    a.color = exp_color
-                        if a.color == exp_color:
-                            a.piece = exp_piece
+            # Always run visual classification on occupied squares so swapped pieces are detected
+            if a.piece is None and self._classifier is not None and roi is not None:
+                a.piece, _ = self._classifier.classify(
+                    roi, a.color, center=a.center, expected_piece=prior_piece_hint
+                )
 
-                # Fallback visual classification if square is still unclassified
-                if a.piece is None and self._classifier is not None and roi is not None:
-                    prior_p = exp[1] if (exp is not None and a.color == exp[0]) else None
-                    a.piece, _ = self._classifier.classify(
-                        roi, a.color, center=a.center, expected_piece=prior_p
-                    )
+            # Fallback only when visual classifier returned None
+            if a.piece is None and prior_piece_hint is not None:
+                a.piece = prior_piece_hint
 
     def analyze_cemetery_slot(
         self, index: int, roi: np.ndarray, side: str = "white"

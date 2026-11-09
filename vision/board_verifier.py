@@ -239,7 +239,7 @@ def verify_board_position(
     board: chess.Board,
     state: BoardState,
     last_move: Optional[chess.Move] = None,
-    max_non_move_mismatches: int = 2,
+    max_non_move_mismatches: int = 0,
 ) -> PositionVerificationResult:
     """
     Compare the physical ``state`` captured by the camera against the logical
@@ -272,19 +272,30 @@ def verify_board_position(
             ("white" if logical_piece.color == chess.WHITE else "black")
             if logical_piece else None
         )
+        exp_piece = PIECE_NAME_EN.get(logical_piece.piece_type) if logical_piece else None
 
         phys = state.board.get(sq_name)
         obs_occ = phys.occupied if phys else False
         obs_color = phys.color if (phys and obs_occ) else None
+        obs_piece = phys.piece if (phys and obs_occ) else None
 
         if exp_occ and obs_occ and exp_color == obs_color and phys and not phys.piece and logical_piece:
-            phys.piece = PIECE_NAME_EN.get(logical_piece.piece_type)
+            phys.piece = exp_piece
+            obs_piece = exp_piece
 
-        if exp_occ != obs_occ or (exp_occ and exp_color != obs_color):
+        piece_mismatch = (
+            exp_occ
+            and obs_occ
+            and exp_color == obs_color
+            and exp_piece is not None
+            and obs_piece is not None
+            and obs_piece != exp_piece
+        )
+        if exp_occ != obs_occ or (exp_occ and exp_color != obs_color) or piece_mismatch:
             mismatches.append({
                 "square": sq_name,
-                "expected": exp_color if exp_occ else "empty",
-                "observed": obs_color if obs_occ else "empty",
+                "expected": f"{exp_color}_{exp_piece}" if (exp_occ and exp_piece) else (exp_color if exp_occ else "empty"),
+                "observed": f"{obs_color}_{obs_piece}" if (obs_occ and obs_piece) else (obs_color if obs_occ else "empty"),
                 "is_move_square": sq_name in (from_name, to_name),
             })
             if sq_name == from_name and obs_occ:
@@ -292,7 +303,7 @@ def verify_board_position(
             elif sq_name == to_name:
                 if not obs_occ:
                     dest_ok = False
-                elif obs_color != exp_color:
+                elif obs_color != exp_color or piece_mismatch:
                     color_ok = False
 
     non_move_mismatches = [m for m in mismatches if not m["is_move_square"]]
@@ -425,12 +436,14 @@ def detect_and_validate_manual_move(
     replaced_opp_by_own: list[str] = []
     unexpected_changes: list[dict] = []
     changed_squares: list[dict] = []
+    swapped_same_color: list[dict] = []
 
     for sq in chess.SQUARES:
         sq_name = chess.square_name(sq).upper()
         p = board.piece_at(sq)
         exp_occ = p is not None
         exp_color = ("white" if p.color == chess.WHITE else "black") if p else None
+        exp_piece = PIECE_NAME_EN.get(p.piece_type) if p else None
 
         phys = state.board.get(sq_name)
         obs_occ = phys.occupied if phys else False
@@ -439,7 +452,19 @@ def detect_and_validate_manual_move(
 
         if exp_occ == obs_occ and (not exp_occ or exp_color == obs_color):
             if exp_occ and phys and not phys.piece and p:
-                phys.piece = PIECE_NAME_EN.get(p.piece_type)
+                phys.piece = exp_piece
+            elif (
+                exp_occ
+                and exp_piece is not None
+                and obs_piece is not None
+                and obs_piece != exp_piece
+            ):
+                swapped_same_color.append({
+                    "square": sq_name,
+                    "before": f"{exp_color}_{exp_piece}",
+                    "after": f"{obs_color}_{obs_piece}",
+                    "detected_piece": obs_piece,
+                })
             continue
 
         change_entry = {
@@ -461,8 +486,22 @@ def detect_and_validate_manual_move(
         else:
             unexpected_changes.append(change_entry)
 
-    # ── 1. No move detected at all ────────────────────────────────────
+    # ── 1. No move detected at all (or pieces swapped in place) ───────
     if not changed_squares:
+        if swapped_same_color:
+            sq_list = ", ".join(
+                f"{s['square']} (esperado {s['before'].split('_')[-1]}, visto {s['detected_piece']})"
+                for s in swapped_same_color[:4]
+            )
+            return ManualValidationResult(
+                valid=False,
+                error_code="PIECES_SWAPPED",
+                message=f"Peças fora da posição esperada: {sq_list}.",
+                speech="Invalid board state. Some pieces are swapped or in the wrong positions.",
+                lcd_lines=("PIECES SWAPPED!", "CHECK BOARD SETUP", swapped_same_color[0]["square"], "FIX & VALIDATE"),
+                changed_squares=swapped_same_color,
+                confidence=state.overall_confidence,
+            )
         return ManualValidationResult(
             valid=False,
             error_code="NO_MOVE_DETECTED",
@@ -586,7 +625,9 @@ def detect_and_validate_manual_move(
     piece_en = PIECE_NAME_EN.get(moving_piece.piece_type, "piece") if moving_piece else "piece"
     piece_pt = PIECE_NAME_PT.get(moving_piece.piece_type, "Peça") if moving_piece else "Peça"
     if to_sq_cand in state.board and state.board[to_sq_cand].occupied:
-        if not (moving_piece and moving_piece.piece_type == chess.PAWN and chess.square_rank(to_idx) in (0, 7)):
+        if state.board[to_sq_cand].piece is None and not (
+            moving_piece and moving_piece.piece_type == chess.PAWN and chess.square_rank(to_idx) in (0, 7)
+        ):
             state.board[to_sq_cand].piece = piece_en
 
     # Determine promotion if pawn reaches last rank

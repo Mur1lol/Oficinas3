@@ -364,7 +364,7 @@ class PieceClassifier:
         """Le vision/pieces/samples/<tipo>_<cor>/*.png (casas recortadas pela camera)."""
         if not self._samples_dir.is_dir():
             return
-        angles = list(range(0, 360, 15))  # 24 angulos de rotacao para cobrir qualquer orientacao
+        angles = list(range(0, 360, 30))  # 12 angulos de rotacao (rapido e suficiente p/ molde 22x22)
         for sub in sorted(self._samples_dir.iterdir()):
             if not sub.is_dir() or "_" not in sub.name:
                 continue
@@ -405,19 +405,27 @@ class PieceClassifier:
         icon, _ = _extract_icon(roi, color=color, center=center)
         search = icon[_SEARCH_BOX[0]:_SEARCH_BOX[1], _SEARCH_BOX[0]:_SEARCH_BOX[1]]
 
-        scores: dict[str, float] = {}
+        color_map = self._samples.get(color, {}) if color in ("white", "black") else {}
+        raw_scores: dict[str, float] = {}
         for ptype in _PIECE_TYPES:
-            tpls = self._pooled_samples.get(ptype)
+            tpls = color_map.get(ptype) or self._pooled_samples.get(ptype)
             if not tpls:
                 continue
             best = max(float(cv2.matchTemplate(search, t, cv2.TM_CCOEFF_NORMED).max()) for t in tpls)
-            scores[ptype] = best
+            raw_scores[ptype] = best
 
-        if not scores:
-            return (expected_piece, 0.72) if expected_piece in _PIECE_TYPES else (None, 0.0)
+        if not raw_scores:
+            return (expected_piece, 0.70) if expected_piece in _PIECE_TYPES else (None, 0.0)
 
-        if expected_piece in scores:
-            scores[expected_piece] = min(1.0, scores[expected_piece] + 0.12)
+        best_raw = max(raw_scores.values())
+        scores = dict(raw_scores)
+        # Vies leve (desempate): so aplica bonus (+0.025) se a peca esperada ja estiver
+        # visualmente proxima da melhor candidata (evita mascarar pecas trocadas de lugar).
+        if (
+            expected_piece in scores
+            and raw_scores[expected_piece] >= best_raw - 0.035
+        ):
+            scores[expected_piece] = min(1.0, scores[expected_piece] + 0.025)
 
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         best_type, best = ranked[0]
@@ -425,9 +433,14 @@ class PieceClassifier:
         margin = best - second
         confidence = float(np.clip(0.6 * best + 2.0 * margin, 0.0, 1.0))
         if best < cfg.PIECE_SAMPLE_MIN_SCORE or margin < cfg.PIECE_SAMPLE_MIN_MARGIN:
-            if expected_piece in _PIECE_TYPES:
-                return expected_piece, max(confidence, 0.72)
-            return None, confidence
+            if best >= cfg.PIECE_SAMPLE_MIN_SCORE * 0.85:
+                return best_type, max(confidence, 0.55)
+            if (
+                expected_piece in raw_scores
+                and raw_scores[expected_piece] >= best_raw - 0.03
+            ):
+                return expected_piece, max(confidence, 0.65)
+            return best_type, confidence
         return best_type, confidence
 
     def _score(self, roi_edges: np.ndarray, variants: list[np.ndarray]) -> float:
@@ -482,20 +495,20 @@ class PieceClassifier:
                 scores[ptype] = max(scores.get(ptype, -1.0),
                                     self._score(roi_edges, variants))
 
-        if expected_piece in scores:
-            scores[expected_piece] = min(1.0, scores[expected_piece] + 0.10)
+        best_raw = max(scores.values()) if scores else -1.0
+        if (
+            expected_piece in scores
+            and scores[expected_piece] >= best_raw - 0.035
+        ):
+            scores[expected_piece] = min(1.0, scores[expected_piece] + 0.025)
 
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         (best_type, best), (_, second) = ranked[0], ranked[1]
         if best < cfg.PIECE_TYPE_MIN_SCORE:
-            if expected_piece in _PIECE_TYPES:
-                return expected_piece, 0.72
             return None, max(0.0, best)
 
         margin = best - second
         confidence = float(np.clip(0.5 * best + 2.5 * margin, 0.0, 1.0))
         if margin < cfg.PIECE_TYPE_MIN_MARGIN:
-            if expected_piece in _PIECE_TYPES:
-                return expected_piece, max(confidence, 0.72)
-            return None, confidence
+            return best_type, confidence
         return best_type, confidence
