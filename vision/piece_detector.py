@@ -182,6 +182,7 @@ class PieceDetector:
         ref_roi: np.ndarray | None = None,
         expected_color: Optional[str] = None,
         expected_piece: Optional[str] = None,
+        classify_type: bool = True,
     ) -> SquareAnalysis:
         """
         Analyse a single square ROI.
@@ -199,6 +200,10 @@ class PieceDetector:
             Optional prior colour ("white" or "black") from logical board.
         expected_piece : str | None
             Optional prior piece type ("pawn", "rook", ...) from logical board.
+        classify_type : bool
+            When False, skips expensive template matching during the initial pass
+            because ``_apply_board_prior`` will assign known piece types directly
+            from ``prior_board`` and only classify ambiguous/promoted squares.
 
         Returns
         -------
@@ -230,13 +235,14 @@ class PieceDetector:
 
         # ── Piece type (centered template matching + prior bias) ──────
         piece: Optional[str] = None
-        if occupied and self._classifier is not None:
-            prior_p = expected_piece if (expected_color is None or color == expected_color) else None
-            piece, _ = self._classifier.classify(
-                roi, color, center=center, expected_piece=prior_p
-            )
-        elif occupied and expected_piece and (expected_color is None or color == expected_color):
-            piece = expected_piece
+        if classify_type:
+            if occupied and self._classifier is not None:
+                prior_p = expected_piece if (expected_color is None or color == expected_color) else None
+                piece, _ = self._classifier.classify(
+                    roi, color, center=center, expected_piece=prior_p
+                )
+            elif occupied and expected_piece and (expected_color is None or color == expected_color):
+                piece = expected_piece
 
         return SquareAnalysis(
             square=square,
@@ -298,11 +304,18 @@ class PieceDetector:
             except Exception:
                 prior_board = None
 
+        use_fast_prior_pass = (
+            prior_mode != "off"
+            and prior_board is not None
+            and hasattr(prior_board, "piece_at")
+        )
         results: dict[str, SquareAnalysis] = {}
         ref_map = ref_squares if ref_squares is not None else self._ref_squares
         for sq, roi in squares.items():
             ref_roi = ref_map.get(sq)
-            results[sq] = self.analyze_square(sq, roi, ref_roi=ref_roi)
+            results[sq] = self.analyze_square(
+                sq, roi, ref_roi=ref_roi, classify_type=not use_fast_prior_pass
+            )
 
         if prior_mode != "off":
             self._apply_board_prior(
@@ -531,6 +544,13 @@ class PieceDetector:
                                     a.color = exp_color
                         if a.color == exp_color:
                             a.piece = exp_piece
+
+                # Fallback visual classification if square is still unclassified
+                if a.piece is None and self._classifier is not None and roi is not None:
+                    prior_p = exp[1] if (exp is not None and a.color == exp[0]) else None
+                    a.piece, _ = self._classifier.classify(
+                        roi, a.color, center=a.center, expected_piece=prior_p
+                    )
 
     def analyze_cemetery_slot(
         self, index: int, roi: np.ndarray, side: str = "white"

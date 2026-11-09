@@ -626,6 +626,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       post("/api/detect", { threshold: thresh }).then(res => {
         if (!res.success) { info.innerHTML = "<span style='color:#fca5a5;'>Erro: " + res.error + "</span>"; return; }
         if (res.annotated_image) previewImg.src = "data:image/jpeg;base64," + res.annotated_image;
+        if (!isLive) cameraImg.src = "/api/snapshot?t=" + Date.now();
         const list = res.squares.length
           ? res.squares.map(s => `${s.square}: ${s.color === "white" ? "branca" : "preta"} ${s.piece ? NAMES[s.piece] : "<span style='color:#fbbf24'>?</span>"}`).join(" · ")
           : "<strong style='color:#34d399;'>Nenhuma peça (tabuleiro vazio)</strong>";
@@ -837,6 +838,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       if (res.annotated_image) {
         previewImg.src = "data:image/jpeg;base64," + res.annotated_image;
       }
+      if (!isLive) {
+        cameraImg.src = "/api/snapshot?t=" + Date.now();
+      }
     }
 
     function runMagnusValidate() {
@@ -900,12 +904,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       post("/api/clear_history").then(() => renderHistory([]));
     }
 
-    function loadGameState() {
+    let lastHistorySignature = "";
+    function loadGameState(isPoll) {
       fetch("/api/game_state").then(r => r.json()).then(data => {
-        if (data.settings) applyGameSettingsToForm(data.settings);
-        if (data.board) renderLogicalBoard(data.board);
-        if (data.history) renderHistory(data.history);
-      });
+        if (!isPoll && data.settings) applyGameSettingsToForm(data.settings);
+        if (data.board && !selectedLogicalSquare) renderLogicalBoard(data.board);
+        if (data.history) {
+          const top = data.history[0];
+          const sig = top ? `${top.timestamp}|${top.type}|${top.move_uci}|${top.error_code}` : "empty";
+          const changed = sig !== lastHistorySignature;
+          lastHistorySignature = sig;
+          renderHistory(data.history);
+          if (isPoll && changed && top) {
+            const label = top.type === "manual_validate" ? "MAGNUS VALIDATE" : "Verificação Pós-Gantry";
+            displayValidationCard(top, label);
+          }
+        }
+      }).catch(() => {});
     }
 
     function updateCameraBadge(hasRealCamera, deviceIdx) {
@@ -952,7 +967,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       });
     }
 
-    window.onload = function () { reloadSaved(true); loadCounts(); loadGameState(); };
+    window.onload = function () {
+      reloadSaved(true);
+      loadCounts();
+      loadGameState(false);
+      setInterval(() => loadGameState(true), 1500);
+    };
   </script>
 </body>
 </html>
@@ -979,11 +999,15 @@ class WebCalibratorApp:
         # Estado logico do tabuleiro para testes/simulacao de MAGNUS VALIDATE e Pos-Gantry
         self.logical_board: chess.Board = chess.Board()
         self.last_move_uci: Optional[str] = None
+        self._last_snapshot_ts: Optional[str] = None
+        self._cached_detector: Optional[PieceDetector] = None
+        self._cached_detector_key: Optional[tuple] = None
         snap = load_logical_board_snapshot()
         if snap and snap.get("fen"):
             try:
                 self.logical_board = chess.Board(snap["fen"])
                 self.last_move_uci = snap.get("last_move_uci")
+                self._last_snapshot_ts = snap.get("updated_at")
             except Exception:
                 self.logical_board = chess.Board()
 
@@ -1090,9 +1114,17 @@ class WebCalibratorApp:
         img[mask > 0] = warped_back[mask > 0]
         return img
 
-    def get_frame(self) -> np.ndarray:
+    def get_frame(self, fresh: bool = False) -> np.ndarray:
+        """
+        Retorna um frame da câmera. Quando ``fresh=True`` (usado em validações,
+        detecção e snapshots), drena os frames antigos do buffer do driver USB
+        (V4L2/DirectShow) antes da leitura para garantir a imagem em tempo real.
+        """
         with self.lock:
             if self.camera is not None and self.camera._cap is not None:
+                if fresh:
+                    for _ in range(4):
+                        self.camera._cap.grab()
                 ret, frame = self.camera._cap.read()
                 if ret and frame is not None:
                     self.last_frame = frame
@@ -1148,12 +1180,49 @@ class WebCalibratorApp:
         cal = self._saved_calibration()
         if cal is None:
             return {"success": False, "error": "Salve a calibração antes de gravar a referência."}
-        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame())
+        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame(fresh=True))
         cv2.imwrite(str(REF_PATH), warped)
+        self._invalidate_detector()
         log.info("Referência de tabuleiro vazio gravada em %s", REF_PATH)
         return {"success": True}
 
     # ── deteccao ────────────────────────────────────────────────────────────
+
+    def _invalidate_detector(self) -> None:
+        self._cached_detector = None
+        self._cached_detector_key = None
+
+    def _get_detector(self, threshold: float, orientation: str) -> PieceDetector:
+        ref_mtime = REF_PATH.stat().st_mtime_ns if REF_PATH.is_file() else 0
+        key = (round(float(threshold), 4), orientation, ref_mtime)
+        if self._cached_detector is None or self._cached_detector_key != key:
+            ref_img = cv2.imread(str(REF_PATH)) if REF_PATH.is_file() else None
+            self._cached_detector = PieceDetector(
+                reference_image=ref_img,
+                occupied_diff_threshold=threshold,
+                board_orientation=orientation,
+            )
+            self._cached_detector_key = key
+        return self._cached_detector
+
+    def _sync_logical_board_from_disk(self) -> None:
+        snap = load_logical_board_snapshot()
+        if not snap or not snap.get("fen"):
+            return
+        ts = snap.get("updated_at")
+        if ts and ts != self._last_snapshot_ts:
+            try:
+                self.logical_board = chess.Board(snap["fen"])
+                self.last_move_uci = snap.get("last_move_uci")
+                self._last_snapshot_ts = ts
+            except Exception:
+                pass
+
+    def _save_logical_snapshot(self, note: str) -> None:
+        save_logical_board_snapshot(self.logical_board, self.last_move_uci, note)
+        snap = load_logical_board_snapshot()
+        if snap:
+            self._last_snapshot_ts = snap.get("updated_at")
 
     def _capture_board_state(
         self,
@@ -1161,18 +1230,14 @@ class WebCalibratorApp:
         prior_mode: str = "auto",
         unbiased_squares: Optional[set[str] | list[str] | tuple[str, ...]] = None,
     ) -> tuple[Optional[np.ndarray], Optional[BoardState], Optional[str], Optional[str]]:
-        """Captura o frame atual, corrige a perspectiva e retorna (warped, BoardState, orientation, error)."""
+        """Captura o frame atual (drenando buffer antigo), corrige a perspectiva e retorna (warped, BoardState, orientation, error)."""
+        self._sync_logical_board_from_disk()
         cal = self._saved_calibration()
         if cal is None:
             return None, None, None, "Falta salvar a calibração da câmera."
-        ref_img = cv2.imread(str(REF_PATH)) if REF_PATH.is_file() else None
-        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame())
+        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame(fresh=True))
         orientation = cal.board_orientation
-        detector = PieceDetector(
-            reference_image=ref_img,
-            occupied_diff_threshold=threshold,
-            board_orientation=orientation,
-        )
+        detector = self._get_detector(threshold, orientation)
         segmenter = BoardSegmenter(board_orientation=orientation)
         squares = segmenter.segment_board(warped)
         prior_b = None if prior_mode == "cap_only" else self.logical_board
@@ -1203,15 +1268,14 @@ class WebCalibratorApp:
         return warped, state, orientation, None
 
     def detect_occupied(self, threshold: float = cfg.OCCUPIED_DIFF_THRESHOLD) -> dict:
+        self._sync_logical_board_from_disk()
         cal = self._saved_calibration()
         if cal is None:
             return {"success": False, "error": "Falta salvar a calibração."}
-        ref_img = cv2.imread(str(REF_PATH)) if REF_PATH.is_file() else None
 
-        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame())
+        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame(fresh=True))
         orientation = cal.board_orientation
-        detector = PieceDetector(reference_image=ref_img, occupied_diff_threshold=threshold,
-                                 board_orientation=orientation)
+        detector = self._get_detector(threshold, orientation)
         segmenter = BoardSegmenter(board_orientation=orientation)
         squares = segmenter.segment_board(warped)
         annotated = segmenter.draw_grid(warped)
@@ -1274,7 +1338,8 @@ class WebCalibratorApp:
         }
 
     def get_game_state(self) -> dict:
-        # Se o jogo principal salvou um snapshot mais recente, podemos exibir
+        # Sincroniza caso o jogo principal (main.py) tenha atualizado o estado logico
+        self._sync_logical_board_from_disk()
         settings = GameSettings.load()
         return {
             "settings": settings.to_dict(),
@@ -1303,7 +1368,7 @@ class WebCalibratorApp:
         if action == "reset":
             self.logical_board = chess.Board()
             self.last_move_uci = None
-            save_logical_board_snapshot(self.logical_board, None, "Reset via Web UI")
+            self._save_logical_snapshot("Reset via Web UI")
             return {"success": True, "board": self.serialize_logical_board(), "message": "Tabuleiro lógico reiniciado na posição inicial."}
 
         if action == "undo":
@@ -1312,7 +1377,7 @@ class WebCalibratorApp:
                 self.last_move_uci = (
                     self.logical_board.peek().uci() if self.logical_board.move_stack else None
                 )
-                save_logical_board_snapshot(self.logical_board, self.last_move_uci, "Undo via Web UI")
+                self._save_logical_snapshot("Undo via Web UI")
                 return {"success": True, "board": self.serialize_logical_board(), "message": "Último lance desfeito."}
             return {"success": False, "error": "Nenhum lance para desfazer.", "board": self.serialize_logical_board()}
 
@@ -1327,7 +1392,7 @@ class WebCalibratorApp:
                 if move in self.logical_board.legal_moves:
                     self.logical_board.push(move)
                     self.last_move_uci = move.uci()
-                    save_logical_board_snapshot(self.logical_board, self.last_move_uci, f"Move {move.uci()}")
+                    self._save_logical_snapshot(f"Move {move.uci()}")
                     return {"success": True, "board": self.serialize_logical_board()}
                 # Caso o desenvolvedor esteja montando uma posicao livre no tabuleiro logico:
                 piece = self.logical_board.remove_piece_at(move.from_square)
@@ -1335,7 +1400,7 @@ class WebCalibratorApp:
                     self.logical_board.set_piece_at(move.to_square, piece)
                     self.logical_board.turn = not self.logical_board.turn
                     self.last_move_uci = move.uci()
-                    save_logical_board_snapshot(self.logical_board, self.last_move_uci, f"Free move {move.uci()}")
+                    self._save_logical_snapshot(f"Free move {move.uci()}")
                     return {"success": True, "board": self.serialize_logical_board()}
                 return {"success": False, "error": "Casa de origem vazia.", "board": self.serialize_logical_board()}
             except Exception as exc:
@@ -1358,7 +1423,7 @@ class WebCalibratorApp:
             new_board.turn = chess.WHITE
             self.logical_board = new_board
             self.last_move_uci = None
-            save_logical_board_snapshot(self.logical_board, None, "Synced from camera")
+            self._save_logical_snapshot("Synced from camera")
             return {
                 "success": True,
                 "board": self.serialize_logical_board(),
@@ -1386,7 +1451,7 @@ class WebCalibratorApp:
         if res.valid and auto_apply and res.move is not None:
             self.logical_board.push(res.move)
             self.last_move_uci = res.move.uci()
-            save_logical_board_snapshot(self.logical_board, self.last_move_uci, f"Validated {res.san}")
+            self._save_logical_snapshot(f"Validated {res.san}")
 
         event = {
             "type": "manual_validate",
@@ -1405,6 +1470,7 @@ class WebCalibratorApp:
     def simulate_verify_position(
         self, threshold: float = cfg.OCCUPIED_DIFF_THRESHOLD
     ) -> dict:
+        self._sync_logical_board_from_disk()
         last_move = chess.Move.from_uci(self.last_move_uci) if self.last_move_uci else None
         unbiased = None
         if last_move is not None:
@@ -1450,22 +1516,23 @@ class WebCalibratorApp:
         if cal is None:
             return {"success": False, "error": "Salve a calibração antes de capturar amostras."}
 
-        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame())
+        warped = PerspectiveCalibrator(cal).correct_perspective(self.get_frame(fresh=True))
         roi = BoardSegmenter(board_orientation=cal.board_orientation).segment_board(warped)[square]
 
         folder = SAMPLES_DIR / f"{ptype}_{color}"
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"{square}_{int(time.time() * 1000)}.png"
         cv2.imwrite(str(path), roi)
+        self._invalidate_detector()
         count = len(list(folder.glob("*.png")))
         log.info("Amostra salva: %s (total %d)", path, count)
         return {"success": True, "count": count}
 
-    @staticmethod
-    def clear_samples(ptype: str, color: str) -> dict:
+    def clear_samples(self, ptype: str, color: str) -> dict:
         folder = SAMPLES_DIR / f"{ptype}_{color}"
         if ptype in PIECE_TYPES and color in ("white", "black") and folder.is_dir():
             shutil.rmtree(folder)
+        self._invalidate_detector()
         return {"success": True}
 
     @staticmethod
@@ -1529,10 +1596,10 @@ def make_handler(app: WebCalibratorApp):
                 self.end_headers()
                 self.wfile.write(data)
             elif path == "/api/snapshot":
-                self._jpeg(app.get_frame())
+                self._jpeg(app.get_frame(fresh=True))
             elif path == "/api/raw_camera":
                 if app.has_real_camera():
-                    self._jpeg(app.get_frame(), 85)
+                    self._jpeg(app.get_frame(fresh=True), 85)
                 else:
                     self.send_error(503, "No physical camera connected")
             elif path == "/api/snapshot_warped":

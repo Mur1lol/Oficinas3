@@ -151,7 +151,7 @@ RETRY_DELAY_SECONDS: float = 1.5
 
 # Seconds to wait after gantry signals "move complete" before capturing,
 # allowing the structure to stop vibrating.
-POST_MOVE_SETTLE_SECONDS: float = 1.5
+POST_MOVE_SETTLE_SECONDS: float = 0.4
 
 # ---------------------------------------------------------------------------
 # Diagnostic image storage

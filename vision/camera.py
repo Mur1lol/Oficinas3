@@ -234,8 +234,12 @@ class CameraController:
                 f"[Camera] Failed to open USB camera (tried {candidates}). {diag_msg}"
             )
 
-        # Set resolution
+        # Set resolution and minimize internal driver frame buffer (avoids stale frames)
         with _quiet_opencv():
+            try:
+                self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self._resolution[0])
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._resolution[1])
 
@@ -300,9 +304,17 @@ class CameraController:
     # Capture
     # ------------------------------------------------------------------
 
-    def capture(self) -> np.ndarray:
+    def capture(self, flush_buffer: bool = True) -> np.ndarray:
         """
-        Capture a single frame.
+        Capture a single live frame.
+
+        Parameters
+        ----------
+        flush_buffer : bool
+            When True (default), drains queued frames from the OS/V4L2/DirectShow
+            ring buffer via ``grab()`` before decoding so the returned image
+            always reflects the current physical board state right now rather
+            than an old frame buffered before the move.
 
         Returns
         -------
@@ -327,6 +339,9 @@ class CameraController:
             return frame
 
         assert self._cap is not None
+        if flush_buffer:
+            for _ in range(4):
+                self._cap.grab()
         ret, frame = self._cap.read()
         if not ret or frame is None:
             self._state = CameraState.FAILED
