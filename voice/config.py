@@ -27,6 +27,8 @@ class Settings:
     wake_min_duration: float = 0.3
     wake_backend: str = "vosk"
     log_level: str = "INFO"
+    player1_usb_slot: int = 1
+    player2_usb_slot: int = 0
 
     def __post_init__(self):
         for name in ("language", "device_name", "wake_backend", "log_level"):
@@ -58,6 +60,10 @@ class Settings:
             raise ValueError("wake_backend must be vosk or openwakeword")
         if self.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             raise ValueError("log_level must be DEBUG, INFO, WARNING or ERROR")
+        for slot_name in ("player1_usb_slot", "player2_usb_slot"):
+            slot_val = getattr(self, slot_name)
+            if type(slot_val) is not int or slot_val < 0:
+                raise ValueError(f"{slot_name} must be a non-negative integer")
 
     @property
     def model_path(self):

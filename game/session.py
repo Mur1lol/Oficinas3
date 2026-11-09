@@ -97,6 +97,12 @@ class VoiceChessGame:
         """Retorna o identificador do LED ('player' p/ Brancas, 'computer' p/ Pretas)."""
         return PLAYER if color == chess.WHITE else COMPUTER
 
+    def _set_active_side(self, side: str) -> None:
+        """Define o painel ativo (LED RGB e microfone USB daquele lado)."""
+        self._active_side_led = side
+        if hasattr(self.listener, "set_side"):
+            self.listener.set_side(side)
+
     def _control_for(self, color: bool) -> str:
         """Retorna 'voice', 'manual' ou 'computer' para o lado especificado."""
         if color == chess.WHITE:
@@ -284,7 +290,7 @@ class VoiceChessGame:
     # ------------------------------------------------------------------
 
     def _idle(self) -> None:
-        self._active_side_led = PLAYER
+        self._set_active_side(PLAYER)
         self.leds.off()
         # Bloqueio: em IDLE, apenas START NEW GAME e permitido
         self._set_allowed_commands(
@@ -347,6 +353,7 @@ class VoiceChessGame:
            - Seleciona nivel de dificuldade (1 a 10): "Magnus Level <1-10>"
            - Seleciona cor das pecas: "Magnus White" ou "Magnus Black"
         """
+        self._set_active_side(PLAYER)
         self._sync_settings_from_disk()
 
         # ── Passo 1: Escolher Modo de Jogo (Option 1 = PvP ou Option 2 = PvE) ──
@@ -383,6 +390,7 @@ class VoiceChessGame:
             self.black_control = "voice"
 
         self._persist_settings()
+        self._set_active_side(self._side_led(self.player_color))
         return True
 
     def _prompt_game_mode(self) -> str | None:
@@ -401,7 +409,7 @@ class VoiceChessGame:
             "Select the game mode. "
             "Option 1, Player versus Player. "
             "Option 2, Player versus Engine. "
-            "Say Magnus Option 1, or Magnus Option 2."
+            "Say Magnus Option."
         )
         self.lcd.show(*mode_lcd)
         self.speaker.say(mode_speech, wait=True)
@@ -538,6 +546,8 @@ class VoiceChessGame:
             return True
 
         # Bloqueio: durante a checagem inicial da camera, apenas MAGNUS VALIDATE e permitido
+        active_side = self._side_led(self.player_color) if self.game_mode == "pve" else PLAYER
+        self._set_active_side(active_side)
         self._set_allowed_commands(
             lambda cmd: isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE"
         )
@@ -686,7 +696,7 @@ class VoiceChessGame:
         while not board.is_game_over():
             turn_color = board.turn
             side_led = self._side_led(turn_color)
-            self._active_side_led = side_led
+            self._set_active_side(side_led)
             control = self._control_for(turn_color)
 
             if control == "computer":
@@ -756,7 +766,8 @@ class VoiceChessGame:
         Ao final da partida (apos a comemoracao):
         Pergunta se o jogador gostaria que o sistema organizasse o tabuleiro e aguarda YES/NO.
         """
-        self._active_side_led = PLAYER
+        active_side = self._side_led(self.player_color) if self.game_mode == "pve" else PLAYER
+        self._set_active_side(active_side)
         prompt_lcd = (
             "GOOD GAME!",
             "ORGANIZE BOARD?",
@@ -1206,10 +1217,12 @@ class VoiceChessGame:
 
                 # Aguarda o jogador dizer MAGNUS VALIDATE (apos ajustar na mao)
                 # ou MAGNUS REPEAT (para repetir o ultimo comando do Gantry)
+                listen_side = self._side_led(self.player_color) if self.game_mode == "pve" else side
+                self._set_active_side(listen_side)
                 while True:
                     result = self.listener.listen()
                     if result.command is not None and not self._is_command_allowed(result.command):
-                        self._command_not_recognized(side=side)
+                        self._command_not_recognized(side=listen_side)
                         self.lcd.show(*ver.lcd_lines)
                         continue
                     if result.command and not result.confirmed:
@@ -1217,7 +1230,7 @@ class VoiceChessGame:
                         self.speaker.say("Cancelled.", wait=True)
                         continue
                     if result.wake_detected and not result.command:
-                        self._command_not_recognized(side=side)
+                        self._command_not_recognized(side=listen_side)
                         self.lcd.show(*ver.lcd_lines)
                         continue
                     if not result.confirmed:

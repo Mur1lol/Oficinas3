@@ -74,16 +74,37 @@ def list_audio_devices() -> list[dict]:
             pa.terminate()
 
 
-def select_device(devices: list[dict], name: str) -> int:
+def select_device(devices: list[dict], name: str, slot: int = 0) -> int:
     if not devices:
         raise AudioError("No audio input devices found.")
     matches = [d for d in devices if name.casefold() in d["name"].casefold()]
     if matches:
-        return int(matches[0]["index"])
+        idx = min(max(0, slot), len(matches) - 1)
+        return int(matches[idx]["index"])
     usb_devices = [d for d in devices if "usb" in d["name"].casefold()]
     if usb_devices:
-        return int(usb_devices[0]["index"])
-    return int(devices[0]["index"])
+        idx = min(max(0, slot), len(usb_devices) - 1)
+        return int(usb_devices[idx]["index"])
+    idx = min(max(0, slot), len(devices) - 1)
+    return int(devices[idx]["index"])
+
+
+def select_side_devices(
+    devices: list[dict],
+    name: str,
+    p1_slot: int = 1,
+    p2_slot: int = 0,
+) -> dict[str, int]:
+    """
+    Mapeia os dois microfones USB para os lados do tabuleiro:
+    - 'player'   (Player 1 / Brancas) -> slot ``p1_slot`` (padrao: 1, segunda placa USB)
+    - 'computer' (Player 2 / Pretas)  -> slot ``p2_slot`` (padrao: 0, primeira placa USB)
+    Se houver apenas 1 microfone conectado, ambos os lados usam o mesmo dispositivo.
+    """
+    return {
+        "player": select_device(devices, name, slot=p1_slot),
+        "computer": select_device(devices, name, slot=p2_slot),
+    }
 
 
 class FrameConverter:
@@ -113,7 +134,7 @@ class FrameConverter:
 
 
 class AudioStream:
-    def __init__(self, settings: Settings, *, maxsize: int = 50):
+    def __init__(self, settings: Settings, *, maxsize: int = 50, initial_side: str = "player"):
         self.settings = settings
         self._queue = queue.Queue(maxsize=maxsize)
         self._frames = deque()
@@ -122,6 +143,10 @@ class AudioStream:
         self._error = None
         self._cutoff = 0.0
         self.received_frames = 0
+        self._side = initial_side if initial_side in ("player", "computer") else "player"
+        self._side_devices: dict[str, int] = {}
+        self._device_names: dict[int, str] = {}
+        self._current_device_index: int | None = None
 
     def __enter__(self):
         self.open()
@@ -130,8 +155,46 @@ class AudioStream:
     def __exit__(self, *_):
         self.close()
 
+    def _open_input_stream(self, index: int) -> None:
+        import pyaudio
+
+        with suppress_c_stderr():
+            self._pa.is_format_supported(
+                self.settings.capture_rate,
+                input_device=index,
+                input_channels=1,
+                input_format=pyaudio.paInt16,
+            )
+            self._stream = self._pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self.settings.capture_rate,
+                input=True,
+                input_device_index=index,
+                frames_per_buffer=self.settings.capture_rate * FRAME_MS // 1000,
+                stream_callback=self._callback,
+                start=False,
+            )
+        self._current_device_index = index
+        self._active = True
+        self._stream.start_stream()
+
+    def _close_input_stream(self) -> None:
+        self._active = False
+        if self._stream is not None:
+            try:
+                self._stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
     def open(self):
         import pyaudio
+        from loguru import logger
 
         if self._active:
             return
@@ -147,28 +210,94 @@ class AudioStream:
                     for i in range(self._pa.get_device_count())
                     if self._pa.get_device_info_by_index(i)["maxInputChannels"] > 0
                 ]
-                index = select_device(devices, self.settings.device_name)
-                self._pa.is_format_supported(
-                    self.settings.capture_rate,
-                    input_device=index,
-                    input_channels=1,
-                    input_format=pyaudio.paInt16,
-                )
-                self._stream = self._pa.open(
-                    format=pyaudio.paInt16,
-                    channels=1,
-                    rate=self.settings.capture_rate,
-                    input=True,
-                    input_device_index=index,
-                    frames_per_buffer=self.settings.capture_rate * FRAME_MS // 1000,
-                    stream_callback=self._callback,
-                    start=False,
-                )
-            self._active = True
-            self._stream.start_stream()
+            self._device_names = {int(d["index"]): d["name"] for d in devices}
+            p1_slot = getattr(self.settings, "player1_usb_slot", 1)
+            p2_slot = getattr(self.settings, "player2_usb_slot", 0)
+            self._side_devices = select_side_devices(
+                devices, self.settings.device_name, p1_slot=p1_slot, p2_slot=p2_slot
+            )
+            p1_idx = self._side_devices["player"]
+            p2_idx = self._side_devices["computer"]
+            logger.info(
+                "[VOZ] Microfones mapeados: Player 1 (Brancas) -> idx {} ({!r}) | "
+                "Player 2 (Pretas) -> idx {} ({!r})",
+                p1_idx,
+                self._device_names.get(p1_idx, "?"),
+                p2_idx,
+                self._device_names.get(p2_idx, "?"),
+            )
+
+            target_idx = self._side_devices.get(self._side, p1_idx)
+            fallback_idx = p2_idx if target_idx == p1_idx else p1_idx
+            try:
+                self._open_input_stream(target_idx)
+            except Exception:
+                if fallback_idx != target_idx:
+                    logger.warning(
+                        "[VOZ] Falha ao abrir microfone idx {}, usando fallback idx {}",
+                        target_idx,
+                        fallback_idx,
+                    )
+                    self._open_input_stream(fallback_idx)
+                else:
+                    raise
+            side_label = "Player 1 (Brancas)" if self._side == "player" else "Player 2 (Pretas)"
+            logger.info(
+                "[VOZ] Microfone ativo inicial: {} [idx {}]",
+                side_label,
+                self._current_device_index,
+            )
         except Exception as error:
             self.close()
             raise AudioError(f"Could not start microphone: {error}") from error
+
+    def set_side(self, side: str) -> None:
+        """
+        Alterna o microfone ativo conforme o turno/lado:
+        - 'player'   -> Microfone do Player 1 (Brancas)
+        - 'computer' -> Microfone do Player 2 (Pretas)
+        """
+        from loguru import logger
+
+        if side not in ("player", "computer"):
+            return
+        self._side = side
+        if not self._active or self._pa is None or not self._side_devices:
+            return
+        target_idx = self._side_devices.get(side)
+        if target_idx is None or target_idx == self._current_device_index:
+            return
+
+        prev_idx = self._current_device_index
+        side_label = "Player 1 (Brancas)" if side == "player" else "Player 2 (Pretas)"
+        try:
+            self._close_input_stream()
+            self._error = None
+            self._cutoff = time.monotonic()
+            self._frames.clear()
+            if self._converter is not None:
+                self._converter.reset()
+            self._drain()
+            self._open_input_stream(target_idx)
+            logger.info(
+                "[VOZ] Microfone ativo trocado para: {} [idx {} - {!r}]",
+                side_label,
+                target_idx,
+                self._device_names.get(target_idx, "?"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[VOZ] Nao foi possivel alternar para microfone idx {} ({}): {}. Mantendo idx {}.",
+                target_idx,
+                side_label,
+                exc,
+                prev_idx,
+            )
+            if prev_idx is not None:
+                try:
+                    self._open_input_stream(prev_idx)
+                except Exception as fatal:
+                    self._error = AudioError(f"Could not reopen microphone: {fatal}")
 
     def _callback(self, data, frame_count, time_info, status):
         import pyaudio
@@ -241,6 +370,7 @@ class AudioStream:
                     self._stream.close()
         finally:
             self._stream = None
+            self._current_device_index = None
             if self._pa is not None:
                 self._pa.terminate()
                 self._pa = None

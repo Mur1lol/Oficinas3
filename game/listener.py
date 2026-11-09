@@ -86,6 +86,11 @@ class VoiceListener:
     def set_command_filter(self, fn: Callable[[object], bool] | None) -> None:
         self._pipeline.command_filter = fn
 
+    def set_side(self, side: str) -> None:
+        """Alterna o microfone ativo ('player' = Brancas/P1, 'computer' = Pretas/P2)."""
+        if hasattr(self._stream, "set_side"):
+            self._stream.set_side(side)
+
     def listen(self) -> ListenResult:
         self._before_listen()
         result = self._pipeline.listen_once(self._stream)
@@ -112,14 +117,20 @@ class TextListener:
         self._on_confirm = on_confirm
         self._before_listen = before_listen
         self._command_filter: Callable[[object], bool] | None = None
+        self._side: str = "player"
 
     def set_command_filter(self, fn: Callable[[object], bool] | None) -> None:
         self._command_filter = fn
 
+    def set_side(self, side: str) -> None:
+        if side in ("player", "computer"):
+            self._side = side
+
     def listen(self) -> ListenResult:
         self._before_listen()
+        mic_tag = "P1/Brancas" if self._side == "player" else "P2/Pretas"
         try:
-            text = input("\n[voz] diga o comando (ex.: 'magnus move e2 e4' ou 'magnus validate'): ")
+            text = input(f"\n[voz - {mic_tag}] diga o comando (ex.: 'magnus move e2 e4' ou 'magnus validate'): ")
         except EOFError:
             raise KeyboardInterrupt
         text = normalize(text)
