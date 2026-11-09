@@ -1261,28 +1261,163 @@ class VoiceChessGame:
 
     def _organize_board(self) -> None:
         """
-        Organiza as pecas de ambos os jogadores de volta as casas iniciais,
-        dividindo em partes (lotes de ate 2 pecas por envio) para manter a
-        comunicacao ativa entre a Raspberry Pi e o ESP32 sem estourar o timeout.
+        Organiza as pecas de ambos os jogadores de volta as casas iniciais:
+        - Cada peca e enviada individualmente como um step para a ESP32.
+        - A selecao de pecas usa puramente a proximidade em relacao ao Gantry.
+        - Apos cada peca, a camera valida se ela chegou na casa de destino antes
+          de avancar para a proxima peca (aceitando MAGNUS REPEAT ou MAGNUS VALIDATE
+          caso alguma peca escape no meio do caminho).
         """
         self.lcd.show("ORGANIZING BOARD", "PLEASE WAIT...", "RESETTING ALL", "PIECES...")
         self.speaker.say("Organizing board. Please wait.", wait=False)
         try:
             self._connect_gantry()
-            batches = self.planner.plan_reorganize_batches(max_carries_per_batch=2)
-            self.leds.set(PLAYER, "green")
-            self.leds.set(COMPUTER, "green")
-            total = len(batches)
-            for idx, batch in enumerate(batches, start=1):
-                if total > 1:
-                    self.lcd.show(
-                        "ORGANIZING BOARD",
-                        f"PART {idx} OF {total}",
-                        "PLEASE WAIT...",
-                        "",
+            reorg_steps = self.planner.plan_reorganize_steps()
+            total = len(reorg_steps)
+            self._set_allowed_commands(
+                lambda cmd: isinstance(cmd, ActionCommand)
+                and cmd.action in ("VALIDATE_MOVE", "REPEAT_MOVE")
+            )
+
+            for idx, step in enumerate(reorg_steps, start=1):
+                src_label = step.from_square or "CEM"
+                step_lines = (
+                    "ORGANIZING BOARD",
+                    f"PIECE {idx} OF {total}",
+                    f"MOVE {src_label} -> {step.to_square}",
+                    "PLEASE WAIT...",
+                )
+                self.lcd.show(*step_lines)
+                self.leds.set(PLAYER, "green")
+                self.leds.set(COMPUTER, "green")
+                self.gantry.execute(step.plan.x, step.plan.y, step.plan.eletroima)
+                self.leds.off()
+
+                save_logical_board_snapshot(
+                    step.board_after,
+                    status_text=f"Organizando ({idx}/{total}): {src_label} -> {step.to_square}",
+                )
+
+                # Valida pela camera se a peca chegou na casa de destino antes de ir para a proxima
+                if self.camera is not None and self.camera.is_ready and self.verify_gantry_moves:
+                    to_sq_idx = chess.parse_square(step.to_square.lower())
+                    from_sq_idx = (
+                        chess.parse_square(step.from_square.lower())
+                        if step.from_square
+                        else to_sq_idx
                     )
-                self.gantry.execute(batch.x, batch.y, batch.eletroima)
-            self.leds.off()
+                    step_move = chess.Move(from_sq_idx, to_sq_idx)
+
+                    while True:
+                        self.lcd.show(
+                            "CAMERA CHECKING",
+                            f"PIECE {idx}/{total} AT {step.to_square}",
+                            "PLEASE WAIT",
+                            "",
+                        )
+                        ver = self.camera.verify_gantry_position(
+                            step.board_after,
+                            last_move=step_move,
+                        )
+                        if ver.dest_ok and ver.color_ok and ver.origin_ok:
+                            self.leds.set(PLAYER, "green")
+                            self.leds.set(COMPUTER, "green")
+                            self.lcd.show(
+                                "PIECE CONFIRMED",
+                                f"PIECE {idx}/{total}: {step.to_square} OK",
+                                f"{src_label} -> {step.to_square}",
+                                "",
+                            )
+                            log.info(
+                                "[Vision] Organizacao (%d/%d): peca confirmada em %s.",
+                                idx, total, step.to_square,
+                            )
+                            time.sleep(0.4)
+                            self.leds.off()
+                            break
+
+                        log.warning(
+                            "[Vision] Organizacao (%d/%d) divergencia em %s: %s",
+                            idx, total, step.to_square, ver.message,
+                        )
+                        self.lcd.show(*ver.lcd_lines)
+                        if ver.speech:
+                            self.speaker.say(ver.speech, wait=False)
+                        self.leds.blink(PLAYER, "red", cfg.BLINK_ERROR_SECONDS)
+                        self.leds.blink(COMPUTER, "red", cfg.BLINK_ERROR_SECONDS)
+                        self.speaker.wait_idle()
+
+                        while True:
+                            result = self.listener.listen()
+                            if result.command is not None and not self._is_command_allowed(result.command):
+                                self._command_not_recognized()
+                                self.lcd.show(*ver.lcd_lines)
+                                continue
+                            if result.wake_detected and not result.command:
+                                self._command_not_recognized()
+                                self.lcd.show(*ver.lcd_lines)
+                                continue
+                            if not result.confirmed:
+                                continue
+                            cmd = result.command
+                            if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
+                                break
+                            if isinstance(cmd, ActionCommand) and cmd.action == "REPEAT_MOVE":
+                                stopped_sq = getattr(ver, "stopped_square", None)
+                                if stopped_sq and stopped_sq != step.to_square:
+                                    try:
+                                        recovery_plan = self.planner.plan_recovery(
+                                            stopped_sq,
+                                            step.to_square,
+                                            return_home=False,
+                                            board_state=step.board_after,
+                                            start_from_dest=True,
+                                        )
+                                        spoken_from = " ".join(stopped_sq)
+                                        spoken_to = " ".join(step.to_square)
+                                        self.lcd.show(
+                                            "RECOVERING PIECE",
+                                            f"FROM {stopped_sq} TO {step.to_square}",
+                                            f"PIECE {idx} OF {total}",
+                                            "",
+                                        )
+                                        self.speaker.say(
+                                            f"Continuing move from {spoken_from} to {spoken_to}.",
+                                            wait=False,
+                                        )
+                                    except PlanningError:
+                                        recovery_plan = step.plan
+                                        self.lcd.show(*step_lines)
+                                        self.speaker.say("Repeating piece movement.", wait=False)
+                                else:
+                                    recovery_plan = step.plan
+                                    self.lcd.show(*step_lines)
+                                    self.speaker.say("Repeating piece movement.", wait=False)
+
+                                self.leds.set(PLAYER, "green")
+                                self.leds.set(COMPUTER, "green")
+                                self.gantry.execute(
+                                    recovery_plan.x,
+                                    recovery_plan.y,
+                                    recovery_plan.eletroima,
+                                )
+                                self.leds.off()
+                                break
+                            self.lcd.show(*ver.lcd_lines)
+                            self.speaker.say(
+                                "Please say Magnus Repeat to retry moving the piece, "
+                                "or Magnus Validate after adjusting it.",
+                                wait=True,
+                            )
+
+            home_plan = self.planner.plan_return_home()
+            if home_plan.steps:
+                self.leds.set(PLAYER, "green")
+                self.leds.set(COMPUTER, "green")
+                self.gantry.execute(home_plan.x, home_plan.y, home_plan.eletroima)
+                self.leds.off()
+
+            save_logical_board_snapshot(self.planner.board, status_text="Tabuleiro organizado")
             self.lcd.show("BOARD ORGANIZED", "ALL PIECES READY", "SAY: MAGNUS", "START NEW GAME")
             self.speaker.say("Board organized.", wait=True)
             time.sleep(1.5)

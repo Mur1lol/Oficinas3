@@ -257,7 +257,11 @@ def verify_board_position(
     dest_ok = True
     color_ok = True
 
-    from_name = chess.square_name(last_move.from_square).upper() if last_move else None
+    from_name = (
+        chess.square_name(last_move.from_square).upper()
+        if (last_move and last_move.from_square != last_move.to_square)
+        else None
+    )
     to_name = chess.square_name(last_move.to_square).upper() if last_move else None
 
     for sq in chess.SQUARES:
@@ -327,8 +331,9 @@ def verify_board_position(
 
     if success:
         if last_move:
-            msg = f"Posição confirmada após {from_name}→{to_name} ({matching_squares}/64 casas conferem)."
-            lcd = ("CAMERA VERIFIED", f"MOVE {from_name}->{to_name} OK", f"MATCH: {matching_squares}/64", "")
+            src_label = from_name or "CEM"
+            msg = f"Posição confirmada após {src_label}→{to_name} ({matching_squares}/64 casas conferem)."
+            lcd = ("CAMERA VERIFIED", f"MOVE {src_label}->{to_name} OK", f"MATCH: {matching_squares}/64", "")
         else:
             msg = f"Tabuleiro verificado com sucesso ({matching_squares}/64 casas conferem)."
             lcd = ("CAMERA VERIFIED", "BOARD POSITION OK", f"MATCH: {matching_squares}/64", "")

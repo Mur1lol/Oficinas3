@@ -89,6 +89,27 @@ def square_to_cell(sq: int) -> tuple[int, int]:
     return 7 - chess.square_rank(sq), 10 - chess.square_file(sq)
 
 
+def cell_to_square(cell: tuple[int, int]) -> int | None:
+    """Celula logica (row, col) -> casa do xadrez (0..63), ou None se for cemiterio."""
+    r, c = cell
+    if 0 <= r < 8 and COL_BOARD_START <= c <= COL_BOARD_END:
+        return chess.square(10 - c, 7 - r)
+    return None
+
+
+@dataclass
+class ReorganizeStep:
+    """Representa o transporte de uma unica peca durante a reorganizacao do tabuleiro."""
+    plan: Plan
+    from_cell: tuple[int, int]
+    to_cell: tuple[int, int]
+    from_square: str | None      # Casa de origem no tabuleiro (ex.: "E4") ou None se veio do cemiterio
+    to_square: str               # Casa de destino no tabuleiro (ex.: "E2")
+    piece_color: bool            # chess.WHITE ou chess.BLACK
+    piece_type: int              # chess.PAWN, chess.ROOK, ...
+    board_after: chess.Board     # Estado logico das 64 casas logo apos colocar esta peca no destino
+
+
 class MovePlanner:
     def __init__(
         self,
@@ -387,13 +408,22 @@ class MovePlanner:
         if self.return_home:
             self._navigate_phys(self.home_phys())
 
-    def plan_recovery(self, from_sq_name: str, to_sq_name: str) -> Plan:
+    def plan_recovery(
+        self,
+        from_sq_name: str,
+        to_sq_name: str,
+        *,
+        return_home: bool | None = None,
+        board_state: chess.Board | None = None,
+        start_from_dest: bool = False,
+    ) -> Plan:
         """
         Planeja um movimento corretivo quando a camera identifica que a peca
         parou em ``from_sq_name`` (ex.: meio do caminho ou casa de origem) antes de
         chegar em ``to_sq_name``. O Gantry vai direto ate ``from_sq_name``, pega a
         peca e leva ate ``to_sq_name``, sem repetir etapas ja concluidas (como capturas).
         """
+        use_return_home = self.return_home if return_home is None else return_home
         from_sq = chess.parse_square(from_sq_name.lower())
         to_sq = chess.parse_square(to_sq_name.lower())
         src_cell = square_to_cell(from_sq)
@@ -401,35 +431,57 @@ class MovePlanner:
 
         self._steps = []
         self.carrying = False
-        self._rebuild()
+        if board_state is not None:
+            self.logic = BoardLogic()
+            for sq in chess.SQUARES:
+                if board_state.piece_at(sq):
+                    r, c = square_to_cell(sq)
+                    self.logic.grid[r][c] = PIECE
+            for (r, c) in self.cem_occ:
+                self.logic.grid[r][c] = PIECE
+        else:
+            self._rebuild()
+
         # No estado fisico atual, a peca esta em src_cell e dst_cell ainda esta vazia
         self.logic.grid[dst_cell[0]][dst_cell[1]] = EMPTY
         self.logic.grid[src_cell[0]][src_cell[1]] = PIECE
 
-        if self.return_home:
+        if start_from_dest:
+            self.robot_phys = (dst_cell[0] * 2, dst_cell[1] * 2)
+        elif use_return_home:
             self.robot_phys = self.home_phys()
             self._emit(0.0, 0.0, 0)
 
         self._carry(src_cell, dst_cell)
         self.carrying = False
         self._rebuild()
-        if self.return_home:
+        if use_return_home:
             self._navigate_phys(self.home_phys())
         return Plan(list(self._steps))
 
-    def plan_reorganize(self, color: bool | None = None) -> Plan:
+    def plan_return_home(self) -> Plan:
+        """Planeja o deslocamento final do Gantry (com ima desligado) de volta ao Home (0, 0)."""
+        self._steps = []
+        self.carrying = False
+        self._rebuild()
+        if self.robot_phys != self.home_phys():
+            self._navigate_phys(self.home_phys())
+        return Plan(list(self._steps))
+
+    def plan_reorganize_steps(self, color: bool | None = None) -> list[ReorganizeStep]:
         """
-        Organiza as pecas de volta as casas iniciais.
-        color=None: organiza ambos os lados (todas as 32 pecas).
-        color=chess.BLACK ou chess.WHITE: organiza apenas a cor especificada.
+        Planeja a reorganizacao do tabuleiro peca por peca (1 ``ReorganizeStep`` por peca),
+        usando puramente o calculo de proximidade em relacao a posicao atual do Gantry
+        (sem priorizar pecas nobres sobre peoes).
         """
         self._snapshot = (self.board.copy(), dict(self.cem_occ), self.robot_phys, self.carrying)
         self._steps = []
+        reorg_steps: list[ReorganizeStep] = []
+        working_board = self.board.copy()
 
-        # Na organizacao, o Gantry sempre parte de (0, 0) apos o Homing com o ima desligado
+        # Na organizacao, o Gantry parte de (0, 0) apos o Homing com o ima desligado
         self.carrying = False
         self.robot_phys = self.home_phys()
-        self._emit(0.0, 0.0, 0)
 
         # 1. Alvos de cada cor:
         # Pretas: Linha 0 (Rank 8) Nobres, Linha 1 (Rank 7) Peoes
@@ -473,6 +525,42 @@ class MovePlanner:
                 key=lambda cell: abs(cell[0] - near_cell[0]) + abs(cell[1] - near_cell[1]),
             )
 
+        def _record_carry(
+            src_cell: tuple[int, int],
+            dst_cell: tuple[int, int],
+            p_color: bool,
+            p_type: int,
+            is_cem: bool,
+        ) -> None:
+            self._steps = []
+            if not reorg_steps:
+                self._emit(0.0, 0.0, 0)
+            self._carry(src_cell, dst_cell)
+
+            from_sq_idx = None if is_cem else cell_to_square(src_cell)
+            from_sq_name = chess.square_name(from_sq_idx).upper() if from_sq_idx is not None else None
+            if from_sq_idx is not None:
+                working_board.remove_piece_at(from_sq_idx)
+
+            to_sq_idx = cell_to_square(dst_cell)
+            if to_sq_idx is None:
+                raise PlanningError(f"Destino invalido fora do tabuleiro: {dst_cell}")
+            to_sq_name = chess.square_name(to_sq_idx).upper()
+            working_board.set_piece_at(to_sq_idx, chess.Piece(p_type, p_color))
+
+            reorg_steps.append(
+                ReorganizeStep(
+                    plan=Plan(list(self._steps)),
+                    from_cell=src_cell,
+                    to_cell=dst_cell,
+                    from_square=from_sq_name,
+                    to_square=to_sq_name,
+                    piece_color=p_color,
+                    piece_type=p_type,
+                    board_after=working_board.copy(),
+                )
+            )
+
         # Se organizando apenas uma cor, limpa pecas da outra cor que estejam nas fileiras alvo
         if color is not None:
             target_rows = (0, 1) if color == chess.BLACK else (6, 7)
@@ -482,7 +570,7 @@ class MovePlanner:
                     cell = square_to_cell(sq)
                     if cell[0] in target_rows:
                         temp = find_empty_temp_square(near_cell=cell)
-                        self._carry(cell, temp)
+                        _record_carry(cell, temp, p.color, p.piece_type, is_cem=False)
                         self.board.remove_piece_at(sq)
                         temp_sq = chess.square(10 - temp[1], 7 - temp[0])
                         self.board.set_piece_at(temp_sq, p)
@@ -530,7 +618,6 @@ class MovePlanner:
                     p["target"] = p["curr"]
                     del unassigned[p["curr"]]
 
-        # Agrupa pecas sem alvo por (color, type) e associa cada uma ao alvo livre mais proximo
         unassigned_pieces = [p for p in pieces if p["target"] is None]
         while unassigned_pieces:
             best_pair = None
@@ -550,89 +637,49 @@ class MovePlanner:
             del unassigned[tgt_sel]
             unassigned_pieces.remove(p_sel)
 
-        # 4. Mover pecas para os alvos com:
-        #    a) Prioridade para pecas que NAO sao peoes (Nobres nas linhas 0 e 7 primeiro,
-        #       evitando que peoes nas linhas 1 e 6 fechem a passagem e forcem o Gantry a andar pelos vaos).
-        #    b) Rota gulosa (nearest-neighbor) a partir da posicao atual do Gantry (iniciando em 0,0).
+        # 4. Mover pecas para os alvos por pura proximidade (nearest-neighbor a partir da posicao atual do Gantry):
         def _robot_dist_to_cell(cell: tuple[int, int]) -> int:
             pr, pc = cell[0] * 2, cell[1] * 2
             return abs(self.robot_phys[0] - pr) + abs(self.robot_phys[1] - pc)
 
-        def _candidate_score(p: dict) -> tuple[int, int, int]:
+        def _proximity_score(p: dict) -> tuple[int, int]:
             tgt = p["target"]
-            # Se for nobre (linha 0 ou 7) e a casa de peao logo a frente ja estiver ocupada,
-            # prioriza encaixar esse nobre antes que as casas laterais da fileira fechem o caminho aberto.
-            front_row = 1 if tgt[0] == 0 else (6 if tgt[0] == 7 else None)
-            front_occupied_priority = (
-                0 if (front_row is not None and self.logic.grid[front_row][tgt[1]] != EMPTY) else 1
-            )
             dist_to_pickup = _robot_dist_to_cell(p["curr"])
             carry_dist = (abs(p["curr"][0] - tgt[0]) + abs(p["curr"][1] - tgt[1])) * 2
-            return (front_occupied_priority, dist_to_pickup, carry_dist)
+            return (dist_to_pickup, carry_dist)
 
         def _move_piece_to(p: dict, dest: tuple[int, int]) -> None:
-            self._carry(p["curr"], dest)
+            _record_carry(p["curr"], dest, p["color"], p["type"], is_cem=p["is_cem"])
             if p["is_cem"]:
                 del self.cem_occ[p["curr"]]
                 p["is_cem"] = False
             p["curr"] = dest
 
-        home_rows = (0, 1, 6, 7) if color is None else ((0, 1) if color == chess.BLACK else (6, 7))
         while True:
             pieces_to_move = [p for p in pieces if p["curr"] != p["target"]]
             if not pieces_to_move:
                 break
 
-            nobles_to_move = [p for p in pieces_to_move if p["type"] != chess.PAWN]
-            pawns_to_move = [p for p in pieces_to_move if p["type"] == chess.PAWN]
-
-            # Fase A: Enquanto houver pecas nobres (nao-peoes) fora do lugar, prioriza elas!
-            if nobles_to_move:
-                ready_nobles = [
-                    p for p in nobles_to_move
-                    if self.logic.grid[p["target"][0]][p["target"][1]] == EMPTY
-                ]
-                if ready_nobles:
-                    best_noble = min(ready_nobles, key=_candidate_score)
-                    _move_piece_to(best_noble, best_noble["target"])
-                    continue
-
-                # Todos os alvos dos nobres pendentes estao ocupados por alguma peca bloqueadora
-                noble_target_cells = {p["target"] for p in nobles_to_move}
-                blockers = [p for p in pieces_to_move if p["curr"] in noble_target_cells]
-                if not blockers:
-                    blockers = nobles_to_move
-                blocker = min(blockers, key=lambda p: _robot_dist_to_cell(p["curr"]))
-                # Se o bloqueador for um peao (ou seu alvo estiver ocupado), move para casa temporaria livre
-                # no centro do tabuleiro (linhas 2..5) para nao fechar a linha de peoes antes da hora
-                if (
-                    blocker["type"] != chess.PAWN
-                    and self.logic.grid[blocker["target"][0]][blocker["target"][1]] == EMPTY
-                ):
-                    _move_piece_to(blocker, blocker["target"])
-                else:
-                    temp = find_empty_temp_square(near_cell=blocker["target"])
-                    _move_piece_to(blocker, temp)
-                continue
-
-            # Fase B: Todos os nobres ja estao nas casas iniciais -> organiza os peoes pela melhor rota
-            ready_pawns = [
-                p for p in pawns_to_move
+            ready_pieces = [
+                p for p in pieces_to_move
                 if self.logic.grid[p["target"][0]][p["target"][1]] == EMPTY
             ]
-            if ready_pawns:
-                best_pawn = min(ready_pawns, key=_candidate_score)
-                _move_piece_to(best_pawn, best_pawn["target"])
+            if ready_pieces:
+                best_piece = min(ready_pieces, key=_proximity_score)
+                _move_piece_to(best_piece, best_piece["target"])
                 continue
 
-            # Se nenhum peao tem alvo livre (ex: peoes trocados), libera o mais proximo do robo
-            in_home_blockers = [p for p in pawns_to_move if p["curr"][0] in home_rows]
-            candidates_to_clear = in_home_blockers if in_home_blockers else pawns_to_move
-            blocker = min(candidates_to_clear, key=lambda p: _robot_dist_to_cell(p["curr"]))
+            # Todos os alvos pendentes estao ocupados (ciclo/troca): move a peca bloqueadora
+            # mais proxima do Gantry para uma casa temporaria livre
+            target_cells = {p["target"] for p in pieces_to_move}
+            blockers = [p for p in pieces_to_move if p["curr"] in target_cells]
+            if not blockers:
+                blockers = pieces_to_move
+            blocker = min(blockers, key=lambda p: _robot_dist_to_cell(p["curr"]))
             temp = find_empty_temp_square(near_cell=blocker["target"])
             _move_piece_to(blocker, temp)
 
-        # 5. Atualiza o estado do tabuleiro de xadrez
+        # 5. Atualiza o estado final do tabuleiro de xadrez
         if color is None:
             self.board = chess.Board()
         else:
@@ -646,46 +693,51 @@ class MovePlanner:
 
         self.carrying = False
         self._rebuild()
-        self._navigate_phys(self.home_phys())
+        return reorg_steps
 
-        return Plan(list(self._steps))
+    def plan_reorganize(self, color: bool | None = None) -> Plan:
+        """
+        Organiza as pecas de volta as casas iniciais e retorna o Plan completo.
+        """
+        reorg_steps = self.plan_reorganize_steps(color=color)
+        all_steps: list[tuple[float, float, int]] = []
+        for st in reorg_steps:
+            for pt in st.plan.steps:
+                if not all_steps or all_steps[-1] != pt:
+                    all_steps.append(pt)
+        home_plan = self.plan_return_home()
+        for pt in home_plan.steps:
+            if not all_steps or all_steps[-1] != pt:
+                all_steps.append(pt)
+        return Plan(all_steps)
 
     def plan_reorganize_batches(
         self,
         color: bool | None = None,
-        max_carries_per_batch: int = 2,
+        max_carries_per_batch: int = 1,
     ) -> list[Plan]:
         """
-        Divide a organizacao completa do tabuleiro em partes menores (lotes de ate
-        ``max_carries_per_batch`` pecas transportadas por comando).
-        Assim, cada parte leva ~20-40s e mantem comunicacao constante entre a
-        Raspberry Pi e o ESP32, evitando estourar o timeout de 3 minutos.
+        Divide a organizacao completa do tabuleiro em lotes de ate ``max_carries_per_batch``
+        pecas por envio (padrao: 1 peca por lote).
         """
-        full_plan = self.plan_reorganize(color=color)
-        steps = full_plan.steps
-        if not steps:
+        reorg_steps = self.plan_reorganize_steps(color=color)
+        if not reorg_steps:
             return []
-
         batches: list[Plan] = []
-        current_batch: list[tuple[float, float, int]] = []
-        carries_in_batch = 0
-
-        for i, step in enumerate(steps):
-            current_batch.append(step)
-            # Detecta o momento exato em que uma peca acabou de ser solta (ima 1 -> 0)
-            if i > 0 and steps[i - 1][2] == 1 and step[2] == 0:
-                carries_in_batch += 1
-                if carries_in_batch >= max_carries_per_batch:
-                    batches.append(Plan(list(current_batch)))
-                    current_batch = []
-                    carries_in_batch = 0
-
-        if current_batch:
-            # Se sobrou apenas o deslocamento final de volta ao (0, 0) sem carregar peca,
-            # anexa ao ultimo lote para evitar um comando extra de 1 passo
-            if batches and all(s[2] == 0 for s in current_batch):
-                batches[-1].steps.extend(current_batch)
-            else:
-                batches.append(Plan(list(current_batch)))
-
+        chunk: list[tuple[float, float, int]] = []
+        count = 0
+        for st in reorg_steps:
+            for pt in st.plan.steps:
+                if not chunk or chunk[-1] != pt:
+                    chunk.append(pt)
+            count += 1
+            if count >= max_carries_per_batch:
+                batches.append(Plan(list(chunk)))
+                chunk = []
+                count = 0
+        if chunk:
+            batches.append(Plan(list(chunk)))
+        home_plan = self.plan_return_home()
+        if home_plan.steps and batches:
+            batches[-1].steps.extend(home_plan.steps)
         return batches
