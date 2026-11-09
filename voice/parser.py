@@ -131,17 +131,26 @@ def normalize(text: str) -> str:
 
 
 def _tokens(text: str) -> list[str]:
-    """Normaliza, descarta [unk] e expande atalhos digitados (e2 -> e two, 3 -> three)."""
-    out: list[str] = []
+    """
+    Normaliza, descarta [unk]/'magnus', expande atalhos digitados (e2 -> e two, 3 -> three)
+    e remove palavras identicas repetidas em sequencia (ex.: 'level level two' -> 'level two').
+    """
+    raw: list[str] = []
     for tok in normalize(text).split():
-        if tok == "unk":
+        if tok in ("unk", "magnus"):
             continue
         if re.fullmatch(r"[a-h][1-8]", tok):
-            out += [tok[0], _DIGIT_TO_WORD[tok[1]]]
+            raw += [tok[0], _DIGIT_TO_WORD[tok[1]]]
         elif tok in _DIGIT_TO_WORD:
-            out.append(_DIGIT_TO_WORD[tok])
+            raw.append(_DIGIT_TO_WORD[tok])
         else:
-            out.append(tok)
+            raw.append(tok)
+
+    out: list[str] = []
+    for tok in raw:
+        if out and out[-1] == tok:
+            continue
+        out.append(tok)
     return out
 
 
@@ -174,7 +183,10 @@ def _match_move(rest: list[str]):
     return COMPLETE, MoveCommand(squares[0], squares[1], promotion=promo), None
 
 
-def _match(tokens: list[str]):
+_COMMAND_HEADS = {"start", "option", "level", "resign", "move"} | set(_SINGLE_WORD)
+
+
+def _match_once(tokens: list[str]):
     if not tokens:
         return PREFIX, None, "Empty transcript."
     head, rest = tokens[0], tokens[1:]
@@ -216,6 +228,24 @@ def _match(tokens: list[str]):
         return _match_move(rest)
 
     return INVALID, None, f"Unknown command word {head!r}."
+
+
+def _match(tokens: list[str]):
+    status, cmd, reason = _match_once(tokens)
+    if status != INVALID:
+        return status, cmd, reason
+    # Se o usuario recomeçou o comando do inicio (ex.: "move e ... move e two e four"),
+    # avalia a partir da ultima palavra-chave de inicio de comando.
+    for i in range(len(tokens) - 1, 0, -1):
+        if tokens[i] in _COMMAND_HEADS:
+            # Evita confundir peca de promocao no final de um lance com novo comando
+            if tokens[0] == "move" and tokens[i] in PROMO_PIECES:
+                continue
+            s2, c2, r2 = _match_once(tokens[i:])
+            if s2 in (COMPLETE, PREFIX):
+                return s2, c2, r2
+            break
+    return status, cmd, reason
 
 
 def match_status(text: str) -> str:
