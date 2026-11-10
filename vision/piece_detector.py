@@ -439,27 +439,23 @@ class PieceDetector:
                             _clear_sq(a)
 
             # 3. In a single move from prior_board, at most 1 previously-empty square
-            #    becomes occupied (or 2 on rank 1/8 during castling). Suppress weaker
-            #    false-positive empty squares when a stronger destination square exists.
+            #    becomes occupied (or 2 on rank 1/8 during castling). Only suppress a 2nd
+            #    empty square if it is significantly weaker than the primary destination
+            #    AND at most 1 origin square was vacated (so moving 2 real pieces is not hidden).
             if prior_mode in ("pre_move", "auto") or dest_missing:
+                n_vacated = sum(
+                    1 for sq, exp in prior_map.items()
+                    if exp is not None and not results[sq].occupied
+                )
                 new_occupied = [
                     a for sq, a in results.items()
                     if prior_map.get(sq) is None and a.occupied and sq not in unbiased
                 ]
-                if len(new_occupied) > 1:
+                if len(new_occupied) > 1 and (n_vacated <= 1 or dest_missing):
                     new_occupied.sort(key=lambda x: x.occ_score, reverse=True)
                     best_new = new_occupied[0]
-                    # Allow a 2nd square only if both are back-rank castling squares with comparable scores
-                    is_castling_pair = (
-                        not dest_missing
-                        and len(new_occupied) >= 2
-                        and best_new.square[1] in ("1", "8")
-                        and new_occupied[1].square[1] == best_new.square[1]
-                        and new_occupied[1].occ_score >= 0.72 * best_new.occ_score
-                    )
-                    keep_count = 2 if is_castling_pair else 1
-                    for extra in new_occupied[keep_count:]:
-                        if extra.occ_score < 0.82 * best_new.occ_score or len(new_occupied) > keep_count:
+                    for extra in new_occupied[1:]:
+                        if extra.occ_score < 0.75 * best_new.occ_score:
                             _clear_sq(extra)
 
         # 4. Global Piece-Count Limit (Top-N by prior-weighted occupancy score)

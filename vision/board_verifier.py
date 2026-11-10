@@ -557,6 +557,30 @@ def detect_and_validate_manual_move(
         from_sq_cand = vacated_own[0]
         to_sq_cand = entered_empty_own[0]
 
+    # Reject immediately if multiple own pieces were vacated (or multiple destinations entered)
+    # and it is NOT a valid castling move (Case A above):
+    all_dests = entered_empty_own + replaced_opp_by_own
+    if from_sq_cand is None and (len(vacated_own) > 1 or len(all_dests) > 1):
+        from_str = ", ".join(vacated_own) if vacated_own else "nenhuma"
+        to_str = ", ".join(all_dests) if all_dests else "nenhuma"
+        return ManualValidationResult(
+            valid=False,
+            error_code="MULTIPLE_MOVES_DETECTED",
+            message=(
+                f"Lance inválido: mais de um movimento detectado ao mesmo tempo "
+                f"(saíram de: {from_str}; entraram em: {to_str}). Faça apenas um lance por vez."
+            ),
+            speech="Invalid move. Multiple pieces were moved at the same time. Please make only one move.",
+            lcd_lines=(
+                "MULTIPLE MOVES!",
+                f"FROM: {','.join(vacated_own[:3])}",
+                f"TO: {','.join(all_dests[:3])}",
+                "FIX & VALIDATE",
+            ),
+            changed_squares=changed_squares,
+            confidence=state.overall_confidence,
+        )
+
     # Case E: Fallback — if 1 own vacated and 1 destination (even with minor noise),
     # check if there is a unique legal move matching (vacated_own, entered_empty_own + replaced_opp_by_own)
     if from_sq_cand is None and len(vacated_own) == 1:
