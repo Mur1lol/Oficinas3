@@ -484,6 +484,29 @@ class PieceDetector:
                 orig_info = prior_map.get(vacated[0])
                 if orig_info is not None:
                     moved_into[entered[0]] = orig_info
+            elif len(vacated) == 1 and len(entered) == 0:
+                # Standard capture: 1 origin vacated, 1 opponent square changed colour
+                orig_info = prior_map.get(vacated[0])
+                if orig_info is not None:
+                    captured_sqs = [
+                        sq for sq, exp in prior_map.items()
+                        if exp is not None
+                        and results[sq].occupied
+                        and exp[0] != orig_info[0]
+                        and results[sq].color == orig_info[0]
+                    ]
+                    if len(captured_sqs) == 1:
+                        moved_into[captured_sqs[0]] = orig_info
+            elif len(vacated) == 2 and len(entered) == 1:
+                # En passant capture: 1 own pawn + 1 opponent pawn vacated, 1 empty square entered
+                dst_sq = entered[0]
+                dst_col = results[dst_sq].color
+                same_col_src = [
+                    prior_map[s] for s in vacated
+                    if prior_map.get(s) is not None and prior_map[s][0] == dst_col
+                ]
+                if len(same_col_src) == 1 and same_col_src[0] is not None:
+                    moved_into[dst_sq] = same_col_src[0]
             elif len(vacated) == 2 and len(entered) == 2:
                 for dst in entered:
                     for src in vacated:
