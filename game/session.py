@@ -393,11 +393,22 @@ class VoiceChessGame:
         self._set_active_side(self._side_led(self.player_color))
         return True
 
+    def _cancel_to_idle(self) -> None:
+        """Anuncia o cancelamento da configuracao e retorna ao estado IDLE."""
+        self.lcd.show(
+            "=== VOICE CHESS ===",
+            "CONFIG CANCELLED",
+            "RETURNING TO IDLE",
+            "",
+        )
+        self.speaker.say("Configuration cancelled.", wait=True)
+
     def _prompt_game_mode(self) -> str | None:
         """Pergunta ao jogador o modo de jogo: Magnus Option 1 (PvP) ou Magnus Option 2 (PvE)."""
-        # Bloqueio: apenas OPTION 1 (MODE_PVP) e OPTION 2 (MODE_PVE) sao permitidos
+        # Bloqueio: apenas OPTION 1 (MODE_PVP), OPTION 2 (MODE_PVE) e CANCEL sao permitidos
         self._set_allowed_commands(
-            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action in ("MODE_PVP", "MODE_PVE")
+            lambda cmd: isinstance(cmd, ActionCommand)
+            and cmd.action in ("MODE_PVP", "MODE_PVE", "CANCEL")
         )
         mode_lcd = (
             "SELECT GAME MODE",
@@ -433,6 +444,9 @@ class VoiceChessGame:
 
             cmd = result.command
             if isinstance(cmd, ActionCommand):
+                if cmd.action == "CANCEL":
+                    self._cancel_to_idle()
+                    return None
                 if cmd.action == "MODE_PVP":
                     return "pvp"
                 if cmd.action == "MODE_PVE":
@@ -443,9 +457,10 @@ class VoiceChessGame:
 
     def _prompt_difficulty_level(self) -> int | None:
         """Pergunta o nivel de dificuldade entre 1 e 10 (Magnus Level <1-10>)."""
-        # Bloqueio: apenas LEVEL (1 a 10) e permitido nesta etapa
+        # Bloqueio: apenas LEVEL (1 a 10) e CANCEL sao permitidos nesta etapa
         self._set_allowed_commands(
-            lambda cmd: isinstance(cmd, LevelCommand) and 1 <= cmd.level <= 10
+            lambda cmd: (isinstance(cmd, LevelCommand) and 1 <= cmd.level <= 10)
+            or (isinstance(cmd, ActionCommand) and cmd.action == "CANCEL")
         )
         lvl_lcd = (
             "SELECT DIFFICULTY",
@@ -477,6 +492,9 @@ class VoiceChessGame:
                 continue
 
             cmd = result.command
+            if isinstance(cmd, ActionCommand) and cmd.action == "CANCEL":
+                self._cancel_to_idle()
+                return None
             if isinstance(cmd, LevelCommand) and 1 <= cmd.level <= 10:
                 return cmd.level
 
@@ -488,9 +506,10 @@ class VoiceChessGame:
 
     def _prompt_piece_color(self) -> bool | None:
         """Pergunta a cor das pecas do jogador no modo PvE (Magnus White ou Magnus Black)."""
-        # Bloqueio: apenas WHITE e BLACK sao permitidos nesta etapa
+        # Bloqueio: apenas WHITE, BLACK e CANCEL sao permitidos nesta etapa
         self._set_allowed_commands(
-            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action in ("COLOR_WHITE", "COLOR_BLACK")
+            lambda cmd: isinstance(cmd, ActionCommand)
+            and cmd.action in ("COLOR_WHITE", "COLOR_BLACK", "CANCEL")
         )
         color_lcd = (
             "SELECT PIECE COLOR",
@@ -523,6 +542,9 @@ class VoiceChessGame:
 
             cmd = result.command
             if isinstance(cmd, ActionCommand):
+                if cmd.action == "CANCEL":
+                    self._cancel_to_idle()
+                    return None
                 if cmd.action == "COLOR_WHITE":
                     return chess.WHITE
                 if cmd.action == "COLOR_BLACK":
@@ -545,11 +567,11 @@ class VoiceChessGame:
         if self.camera is None or not self.camera.is_ready:
             return True
 
-        # Bloqueio: durante a checagem inicial da camera, apenas MAGNUS VALIDATE e permitido
+        # Bloqueio: durante a checagem inicial da camera, apenas MAGNUS VALIDATE e CANCEL sao permitidos
         active_side = self._side_led(self.player_color) if self.game_mode == "pve" else PLAYER
         self._set_active_side(active_side)
         self._set_allowed_commands(
-            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE"
+            lambda cmd: isinstance(cmd, ActionCommand) and cmd.action in ("VALIDATE_MOVE", "CANCEL")
         )
 
         while True:
@@ -607,6 +629,9 @@ class VoiceChessGame:
                 if not result.confirmed:
                     continue
                 cmd = result.command
+                if isinstance(cmd, ActionCommand) and cmd.action == "CANCEL":
+                    self._cancel_to_idle()
+                    return False
                 if isinstance(cmd, ActionCommand) and cmd.action == "VALIDATE_MOVE":
                     break
                 self.lcd.show(*err_lcd)
